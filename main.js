@@ -4,11 +4,14 @@ const path = require('path');
 const Store = require('electron-store');
 
 const sequenceEngine = require('./services/sequenceEngine');
+const teensyFlashService = require('./services/teensyFlashService');
 const workflowEngine = require('./services/workflowEngine');
 const ePiezo = require('./services/dcxService');
 
 const store = new Store();
 let mainWindow = null;
+
+teensyFlashService.setStore(store);
 
 function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -47,6 +50,10 @@ workflowEngine.on('status', (status) => {
   sendToRenderer('workflow:status', status);
 });
 
+teensyFlashService.on('status', (status) => {
+  sendToRenderer('teensy:status', status);
+});
+
 ePiezo.on('telemetry', (telemetry) => {
   sendToRenderer('dcx:telemetry', telemetry);
 });
@@ -80,6 +87,52 @@ function createWindow() {
   mainWindow.on('closed', () => {
     mainWindow = null;
   });
+}
+
+async function maybeRestoreFactoryFirmwareOnLaunch() {
+  const config = store.get('dcx-config');
+  if (config?.simulation) {
+    return { success: true, skipped: true, message: 'Skipped factory firmware restore in simulation mode' };
+  }
+
+  return teensyFlashService.restoreFactoryFirmware({ skipIfNoPort: true });
+}
+
+async function canFlashTeensy() {
+  if (sequenceEngine.getStatus().isRunning) {
+    return {
+      success: false,
+      error: 'A sequence is already running',
+      message: 'Stop the active sequence before flashing the Teensy'
+    };
+  }
+
+  if (workflowEngine.getStatus().isRunning) {
+    return {
+      success: false,
+      error: 'A workflow is already running',
+      message: 'Stop the active workflow before flashing the Teensy'
+    };
+  }
+
+  const status = await ePiezo.getStatus();
+  if (status?.simulation) {
+    return {
+      success: false,
+      error: 'Teensy flashing is unavailable in simulation mode',
+      message: 'Switch out of simulation mode before flashing the Teensy'
+    };
+  }
+
+  if (typeof ePiezo.hasActiveOperation === 'function' && ePiezo.hasActiveOperation()) {
+    return {
+      success: false,
+      error: 'Stop sonics, seek, or scan before flashing the Teensy.',
+      message: 'A DCX operation is already active'
+    };
+  }
+
+  return { success: true };
 }
 
 async function sendInitialStatus() {
@@ -306,6 +359,82 @@ app.whenReady().then(async () => {
     return workflowEngine.getStatus();
   });
 
+  ipcMain.handle('dcx:setSerialTelemetryEnabled', async (_, enabled) => {
+    return ePiezo.setSerialTelemetryEnabled(enabled);
+  });
+
+  ipcMain.handle('teensy:getStatus', async () => {
+    return teensyFlashService.getStatus();
+  });
+
+  ipcMain.handle('teensy:selectFirmware', async () => {
+    const result = await dialog.showOpenDialog(mainWindow, {
+      title: 'Select Teensy Firmware',
+      properties: ['openFile'],
+      filters: [
+        { name: 'Firmware Files', extensions: ['hex'] },
+        { name: 'All Files', extensions: ['*'] }
+      ]
+    });
+
+    if (result.canceled || !result.filePaths.length) {
+      return { success: false, canceled: true };
+    }
+
+    const filePath = result.filePaths[0];
+    const status = teensyFlashService.setFirmwarePath(filePath);
+
+    return {
+      success: true,
+      filePath,
+      fileName: path.basename(filePath),
+      status
+    };
+  });
+
+  ipcMain.handle('teensy:selectCli', async () => {
+    const result = await dialog.showOpenDialog(mainWindow, {
+      title: 'Select Teensy Loader CLI',
+      properties: ['openFile'],
+      filters: [
+        { name: 'Executables', extensions: ['exe'] },
+        { name: 'All Files', extensions: ['*'] }
+      ]
+    });
+
+    if (result.canceled || !result.filePaths.length) {
+      return { success: false, canceled: true };
+    }
+
+    const filePath = result.filePaths[0];
+    const status = teensyFlashService.setCliPath(filePath);
+
+    return {
+      success: true,
+      filePath,
+      fileName: path.basename(filePath),
+      status
+    };
+  });
+
+  ipcMain.handle('teensy:flash', async (_, payload = {}) => {
+    const permission = await canFlashTeensy();
+    if (!permission.success) {
+      return permission;
+    }
+
+    return teensyFlashService.flash(payload || {});
+  });
+
+  ipcMain.handle('teensy:restoreFactoryFirmware', async () => {
+    const permission = await canFlashTeensy();
+    if (!permission.success) {
+      return permission;
+    }
+
+    return teensyFlashService.restoreFactoryFirmware();
+  });
+
   ipcMain.handle('workflow:loadScript', async () => {
     const result = await dialog.showOpenDialog(mainWindow, {
       title: 'Load Workflow Script',
@@ -355,7 +484,15 @@ app.whenReady().then(async () => {
     };
   });
 
-  setTimeout(sendInitialStatus, 500);
+  setTimeout(async () => {
+    try {
+      await maybeRestoreFactoryFirmwareOnLaunch();
+    } catch (error) {
+      console.error('[TEENSY FACTORY RESTORE ERROR]', error.message);
+    }
+
+    await sendInitialStatus();
+  }, 500);
 });
 
 app.on('window-all-closed', () => {

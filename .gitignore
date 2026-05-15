@@ -8,6 +8,11 @@ release/
 .env.local
 
 *.log
+firmware/build/
+*.hex
+*.bin
+teensy_loader_cli.exe
+tools/teensy_loader_cli.exe
 
 .DS_Store
 Thumbs.db

@@ -54,6 +54,7 @@ export function WorkflowView() {
                           <div><span className="text-foreground">WAIT [ms]</span> <span data-i18n="workflow.help.wait">Pause execution for a duration in milliseconds.</span></div>
                           <div><span className="text-foreground">SEEK</span> <span data-i18n="workflow.help.seek">Run a seek cycle.</span></div>
                           <div><span className="text-foreground">RESET</span> <span data-i18n="workflow.help.reset">Clear active alarms.</span></div>
+                          <div><span className="text-foreground">FLASH</span> <span data-i18n="workflow.help.flash">Flash the Teensy with the firmware selected in Settings.</span></div>
                         </div>
 
                         <div className="mt-4 text-xs font-semibold uppercase tracking-[0.22em] text-muted-foreground" data-i18n="workflow.help.examples">Example Scripts</div>

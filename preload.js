@@ -24,6 +24,7 @@ contextBridge.exposeInMainWorld('api', {
     runWorkflow: (s) => ipcRenderer.invoke('dcx:runWorkflow', s),
     stopWorkflow: () => ipcRenderer.invoke('dcx:stopWorkflow'),
     getWorkflowStatus: () => ipcRenderer.invoke('dcx:getWorkflowStatus'),
+    setSerialTelemetryEnabled: (enabled) => ipcRenderer.invoke('dcx:setSerialTelemetryEnabled', enabled),
     onStatusInit: (cb) => {
       const listener = (_, data) => cb(data);
       ipcRenderer.on('dcx:status-init', listener);
@@ -69,6 +70,22 @@ contextBridge.exposeInMainWorld('api', {
   workflow: {
     loadScript: () => ipcRenderer.invoke('workflow:loadScript'),
     saveScript: (payload) => ipcRenderer.invoke('workflow:saveScript', payload)
+  },
+
+  teensy: {
+    getStatus: () => ipcRenderer.invoke('teensy:getStatus'),
+    selectFirmware: () => ipcRenderer.invoke('teensy:selectFirmware'),
+    selectCli: () => ipcRenderer.invoke('teensy:selectCli'),
+    flash: (payload) => ipcRenderer.invoke('teensy:flash', payload),
+    restoreFactoryFirmware: () => ipcRenderer.invoke('teensy:restoreFactoryFirmware'),
+    onStatus: (cb) => {
+      const listener = (_, data) => cb(data);
+      ipcRenderer.on('teensy:status', listener);
+
+      return () => {
+        ipcRenderer.removeListener('teensy:status', listener);
+      };
+    }
   },
 
   store: {

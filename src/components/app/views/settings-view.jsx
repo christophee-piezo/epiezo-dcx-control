@@ -132,7 +132,54 @@ const workflowCommandRows = [
   { command: 'SET_AMP [0-100]', detail: 'Update weld amplitude before the next weld.', detailKey: 'settings.docs.workflow.setAmp' },
   { command: 'SEEK', detail: 'Run a seek cycle / horn scan.', detailKey: 'settings.docs.workflow.seek' },
   { command: 'RESET', detail: 'Clear active alarms.', detailKey: 'settings.docs.workflow.reset' },
-  { command: 'WAIT [ms]', detail: 'Pause for a duration in milliseconds.', detailKey: 'settings.docs.workflow.wait' }
+  { command: 'WAIT [ms]', detail: 'Pause for a duration in milliseconds.', detailKey: 'settings.docs.workflow.wait' },
+  { command: 'FLASH', detail: 'Flash the Teensy with the firmware selected in Settings.', detailKey: 'settings.docs.workflow.flash' }
+];
+
+const teensyStatusInputRows = [
+  { pin: 'PIN0', signal: 'DO_GENERAL_ALARM', role: 'HIGH indicates an alarm occurred.' },
+  { pin: 'PIN1', signal: 'DO_SEEKSCAN_OUT', role: 'HIGH indicates a seek or scan is in progress.' },
+  { pin: 'PIN14', signal: 'DO_READY', role: 'HIGH indicates the system is ready.' },
+  { pin: 'PIN15', signal: 'DO_SONICS_ACTIVE', role: 'HIGH indicates ultrasonics are active.' }
+];
+
+const teensyControlOutputRows = [
+  { pin: 'PIN7', signal: 'DI_EXT_START', role: 'HIGH turns ultrasonics on when K5 is in its default LOW state.' },
+  { pin: 'PIN8', signal: 'DI_EXT_SEEK', role: 'HIGH performs a seek.' },
+  { pin: 'PIN20', signal: 'DI_EXT_RESET', role: 'HIGH resets an alarm.' },
+  { pin: 'PIN21', signal: 'DI_EXT_CLEAR', role: 'HIGH clears memory.' },
+  { pin: 'PIN22', signal: 'DI_MEMORY_CLEAR', role: 'HIGH clears memory.' },
+  { pin: 'PIN40', signal: 'PROGRAM_OPTO', role: 'HIGH requests Teensy reprogramming in hardware.' }
+];
+
+const teensyAuxOutputRows = [
+  { pin: 'PIN24', signal: 'DI_RELAY_K6', role: 'HIGH switches the amplitude source to external.' },
+  { pin: 'PIN25', signal: 'DI_RELAY_K5', role: 'LOW is the default state used to start ultrasonics with DI_EXT_START HIGH.' },
+  { pin: 'PIN26', signal: 'READY_LED_2', role: 'LOW when the system is ready.' },
+  { pin: 'PIN27', signal: 'READY_LED_1', role: 'HIGH when the system is ready.' },
+  { pin: 'PIN38', signal: 'SONICS_ACTIVE_LED_2', role: 'LOW when ultrasonics are active.' },
+  { pin: 'PIN39', signal: 'SONICS_ACTIVE_LED_1', role: 'HIGH when ultrasonics are active.' }
+];
+
+const teensyI2cRows = [
+  { pin: 'PIN16', signal: 'SCL1', role: 'MCP4728 SCL.' },
+  { pin: 'PIN17', signal: 'SDA1', role: 'MCP4728 SDA.' },
+  { pin: 'PIN18', signal: 'SDA', role: 'ADS1015 SDA.' },
+  { pin: 'PIN19', signal: 'SCL', role: 'ADS1015 SCL.' }
+];
+
+const teensyDacRows = [
+  { pin: 'VOUTA', signal: 'MCP4728', role: 'Amplitude control.' },
+  { pin: 'VOUTB', signal: 'MCP4728', role: 'Frequency offset control.' },
+  { pin: 'VOUTC', signal: 'MCP4728', role: 'BNC 6.' },
+  { pin: 'VOUTD', signal: 'MCP4728', role: 'BNC 8.' }
+];
+
+const teensyAdcRows = [
+  { pin: 'AIN0', signal: 'ADS1015', role: 'FREQUENCY_OUT.' },
+  { pin: 'AIN1', signal: 'ADS1015', role: 'AMPLITUDE_OUT.' },
+  { pin: 'AIN2', signal: 'ADS1015', role: 'BNC 1.' },
+  { pin: 'AIN3', signal: 'ADS1015', role: 'BNC 5.' }
 ];
 
 function RoutingField({ id, label }) {
@@ -257,6 +304,34 @@ function DocumentationProcedureStep({ body, bodyKey, index, title, titleKey }) {
   );
 }
 
+function PinoutSection({ rows, title, translationKey }) {
+  return (
+    <section className="rounded-xl border border-border/60 bg-background/72 p-3">
+      <div className="text-[0.68rem] font-semibold uppercase tracking-[0.18em] text-muted-foreground" data-i18n={translationKey}>{title}</div>
+      <div className="mt-3 data-table-shell overflow-x-auto rounded-lg border border-border/50 bg-background/70">
+        <table className="data-table">
+          <thead>
+            <tr>
+              <th className="w-28" data-i18n="settings.docs.columns.pin">Pin / Channel</th>
+              <th className="w-48" data-i18n="settings.docs.columns.signal">Signal</th>
+              <th data-i18n="settings.docs.columns.role">Role</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row) => (
+              <tr key={`${title}-${row.pin}-${row.signal}`}>
+                <td><code>{row.pin}</code></td>
+                <td><code>{row.signal}</code></td>
+                <td className="text-muted-foreground">{row.role}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+
 function SettingsTabButton({ id, label, translationKey, active = false }) {
   return (
     <Button
@@ -357,10 +432,43 @@ export function SettingsView() {
                   <CardTitle data-i18n="settings.system.title">System Maintenance</CardTitle>
                   <CardDescription data-i18n="settings.system.description">Run operator-side maintenance actions for the connected controller.</CardDescription>
                 </CardHeader>
-                <CardContent>
-                  <Button className="w-full sm:w-auto" data-i18n="settings.buttons.wipeMemory" id="clear-branson-mem-btn" variant="outline">
-                    Wipe Branson Memory (CLR)
-                  </Button>
+                <CardContent className="grid gap-4">
+                  <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] xl:items-end">
+                    <FormField label="Teensy Loader CLI" labelKey="settings.teensyFlash.loader">
+                      <div className="grid gap-2">
+                        <Input data-i18n-placeholder="settings.teensyFlash.loaderPlaceholder" id="settings-teensy-loader-path" placeholder="Use teensy_loader_cli.exe from PATH or select an executable" readOnly type="text" />
+                        <Button className="w-full sm:w-auto" data-i18n="settings.teensyFlash.selectLoader" id="settings-teensy-loader-btn" size="sm" type="button" variant="outline">
+                          Select CLI...
+                        </Button>
+                      </div>
+                    </FormField>
+
+                    <FormField label="Firmware (.hex)" labelKey="settings.teensyFlash.firmware">
+                      <div className="grid gap-2">
+                        <Input data-i18n-placeholder="settings.teensyFlash.firmwarePlaceholder" id="settings-teensy-firmware-path" placeholder="Select a Teensy firmware .hex file" readOnly type="text" />
+                        <Button className="w-full sm:w-auto" data-i18n="settings.teensyFlash.selectFirmware" id="settings-teensy-firmware-btn" size="sm" type="button" variant="outline">
+                          Select Firmware...
+                        </Button>
+                      </div>
+                    </FormField>
+
+                    <div className="flex flex-col gap-2 xl:items-end">
+                      <Button className="w-full sm:w-auto" data-i18n="settings.teensyFlash.flash" id="settings-teensy-flash-btn" type="button">
+                        Flash Teensy
+                      </Button>
+                    </div>
+                  </div>
+
+                  <div className="space-y-1">
+                    <div className="text-sm font-medium text-primary" id="settings-teensy-flash-status">Select a .hex firmware file to enable Teensy flashing.</div>
+                    <div className="text-xs text-muted-foreground" data-i18n="settings.teensyFlash.hint" id="settings-teensy-flash-hint">The sequence flash-before-run option and workflow FLASH command use the firmware selected here.</div>
+                  </div>
+
+                  <div className="flex flex-wrap gap-2 border-t border-border/70 pt-4">
+                    <Button className="w-full sm:w-auto" data-i18n="settings.buttons.restoreFactorySettings" id="restore-factory-settings-btn" variant="outline">
+                      Restore Factory Settings
+                    </Button>
+                  </div>
                 </CardContent>
               </Card>
 
@@ -457,7 +565,7 @@ export function SettingsView() {
               <Card className="min-w-0">
                 <CardHeader>
                   <CardTitle data-i18n="settings.io.title">I/O Configuration</CardTitle>
-                  <CardDescription data-i18n="settings.io.description">Keep routing controls and live digital and analog I/O in one view.</CardDescription>
+                  <CardDescription data-i18n="settings.io.description">Keep routing controls and live DCX I/O in one view.</CardDescription>
                 </CardHeader>
                 <CardContent className="grid gap-6">
                   <section className="grid gap-4 rounded-xl border border-border/70 bg-background/55 p-4">
@@ -764,6 +872,21 @@ export function SettingsView() {
                       </div>
                     </DocumentationCard>
                   </div>
+
+                  <DocumentationCard description="Reference mapping for the Teensy GPIO, relay, DAC, and ADC channels used by the fixture." descriptionKey="settings.docs.pinout.description" title="Teensy 4.1 Pinout Reference" translationKey="settings.docs.pinout.title">
+                    <div className="rounded-xl border border-amber-500/20 bg-amber-500/8 px-3 py-2 text-sm text-muted-foreground" data-i18n="settings.docs.pinout.note">
+                      The live I/O panel reads DCX Ethernet snapshots. Use this pinout card as the Teensy-side hardware reference.
+                    </div>
+
+                    <div className="mt-4 grid gap-4 xl:grid-cols-2">
+                      <PinoutSection rows={teensyStatusInputRows} title="Status Inputs" translationKey="settings.docs.pinout.statusInputs" />
+                      <PinoutSection rows={teensyControlOutputRows} title="Control Outputs" translationKey="settings.docs.pinout.controlOutputs" />
+                      <PinoutSection rows={teensyAuxOutputRows} title="Aux Outputs" translationKey="settings.docs.pinout.auxOutputs" />
+                      <PinoutSection rows={teensyI2cRows} title="I2C Buses" translationKey="settings.docs.pinout.i2cBuses" />
+                      <PinoutSection rows={teensyDacRows} title="MCP4728 Outputs" translationKey="settings.docs.pinout.dacOutputs" />
+                      <PinoutSection rows={teensyAdcRows} title="ADS1015 Inputs" translationKey="settings.docs.pinout.adcInputs" />
+                    </div>
+                  </DocumentationCard>
 
                   <div className="grid gap-4 xl:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)]">
                     <DocumentationCard description="These are the fastest controls for direct operator actions." descriptionKey="settings.docs.manual.description" title="Manual Controls" translationKey="settings.docs.manual.title">

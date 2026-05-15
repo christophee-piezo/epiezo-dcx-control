@@ -1,6 +1,7 @@
 const EventEmitter = require('events');
 
 const dcx = require('./dcxService');
+const teensyFlashService = require('./teensyFlashService');
 
 const IDLE_STATUS = {
   state: 'idle',
@@ -65,7 +66,8 @@ class SequenceEngine extends EventEmitter {
     const timeline = payload.timeline.map((block, index) => this.normalizeBlock(block, index));
     const options = {
       loopCount: this.parseNonNegativeInt(payload.options.loopCount, 1, 'Loop count'),
-      autoAbort: payload.options.autoAbort === 'NEVER' ? 'NEVER' : 'ALARM'
+      autoAbort: payload.options.autoAbort === 'NEVER' ? 'NEVER' : 'ALARM',
+      flashBeforeRun: payload.options.flashBeforeRun === true || payload.options.flashBeforeRun === 'true'
     };
 
     if (options.loopCount < 1) {
@@ -243,7 +245,28 @@ class SequenceEngine extends EventEmitter {
     };
   }
 
-  async applySequenceOptions() {
+  async applySequenceOptions(options) {
+    if (!options.flashBeforeRun) {
+      return;
+    }
+
+    const status = await dcx.getStatus();
+    if (status?.simulation) {
+      throw new Error('Teensy flashing is unavailable in simulation mode');
+    }
+
+    this.setStatus({
+      state: 'flashing',
+      isRunning: true,
+      blockType: 'FLASH',
+      message: 'FLASHING TEENSY',
+      error: null
+    });
+
+    const result = await teensyFlashService.flash();
+    if (!result?.success) {
+      throw new Error(result?.error || result?.message || 'Teensy flash failed');
+    }
   }
 
   async applyPulseRamp(ramp) {

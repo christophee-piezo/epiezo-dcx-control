@@ -10,10 +10,10 @@ const FOOTER_TONE_CLASSES = {
   error: ['text-red-400']
 };
 const STATUS_SIGNAL_PINS = {
-  ready: 'PIN7',
-  active: 'PIN8',
-  alarm: 'PIN9',
-  seek: 'PIN10'
+  ready: 'PIN14',
+  active: 'PIN15',
+  alarm: 'PIN0',
+  seek: 'PIN1'
 };
 
 function getDefaultFooterMessage() {
@@ -228,7 +228,7 @@ function getIoDigitalState(entry) {
 }
 
 function resolveIndicatorState(pin, telemetryValue) {
-  if (runtimeState.connections?.ethernet) {
+  if (!runtimeState.connections?.teensy && runtimeState.connections?.ethernet) {
     const ioEntry = runtimeState.ioSnapshot?.entries?.[pin] || null;
     const ioState = getIoDigitalState(ioEntry);
     if (ioState != null) {
@@ -257,10 +257,9 @@ export function shouldUseSetupRealtimeData(telemetry = runtimeState.lastTelemetr
   return Boolean(
     runtimeState.connections?.ethernet
     && !runtimeState.simulation
-    && (
-      !runtimeState.connections?.teensy
-      || (!resolvedTelemetry.active && !resolvedTelemetry.seek)
-    )
+    && !runtimeState.connections?.teensy
+    && !resolvedTelemetry.active
+    && !resolvedTelemetry.seek
   );
 }
 
@@ -313,10 +312,10 @@ export function updateTelemetry(telemetry = {}) {
   const active = $('led-active');
   const seek = $('led-seek');
   const alarm = $('led-alarm');
-  const readyState = resolveIndicatorState('PIN7', nextTelemetry.ready);
-  const activeState = resolveIndicatorState('PIN8', nextTelemetry.active);
-  const seekState = resolveIndicatorState('PIN10', nextTelemetry.seek);
-  const alarmState = resolveIndicatorState('PIN9', nextTelemetry.alarm);
+  const readyState = resolveIndicatorState('PIN14', nextTelemetry.ready);
+  const activeState = resolveIndicatorState('PIN15', nextTelemetry.active);
+  const seekState = resolveIndicatorState('PIN1', nextTelemetry.seek);
+  const alarmState = resolveIndicatorState('PIN0', nextTelemetry.alarm);
 
   if (ready) ready.classList.toggle('active', readyState);
   if (active) active.classList.toggle('active', activeState);

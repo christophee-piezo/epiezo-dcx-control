@@ -1,6 +1,7 @@
 const EventEmitter = require('events');
 
 const dcx = require('./dcxService');
+const teensyFlashService = require('./teensyFlashService');
 
 const IDLE_STATUS = {
   state: 'idle',
@@ -82,6 +83,7 @@ class WorkflowEngine extends EventEmitter {
         return { lineNumber, command, amplitude };
       }
       case 'STOP':
+      case 'FLASH':
       case 'SEEK':
       case 'RESET':
         if (args.length) {
@@ -163,6 +165,22 @@ class WorkflowEngine extends EventEmitter {
       case 'WAIT':
         await this.waitWithCancel(instruction.duration);
         break;
+      case 'FLASH': {
+        const status = await dcx.getStatus();
+        if (status?.simulation) {
+          throw new Error('Teensy flashing is unavailable in simulation mode');
+        }
+
+        if (typeof dcx.hasActiveOperation === 'function' && dcx.hasActiveOperation()) {
+          throw new Error('FLASH requires sonics, seek, and scan activity to be idle');
+        }
+
+        const result = await teensyFlashService.flash();
+        if (!result?.success) {
+          throw new Error(result?.error || result?.message || 'Teensy flash failed');
+        }
+        break;
+      }
       default:
         throw new Error(`Unsupported workflow command "${instruction.command}"`);
     }

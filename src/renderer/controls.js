@@ -3,21 +3,14 @@ import { log } from './logger.js';
 import { t } from './preferences.js';
 import { initSequenceLibrary, syncSequenceEditorUi } from './sequence-library.js';
 import { normalizeConnectionConfig, toggleConnectionSettings } from './serial.js';
-import { getResolvedTelemetry, hideConnectionFailurePopup, refreshRealtimeDataDisplay, shouldUseSetupRealtimeData, showConnectionFailurePopup, showFooterFeedback, updateStatus, updateTelemetry } from './status-ui.js';
+import { getResolvedTelemetry, hideConnectionFailurePopup, showConnectionFailurePopup, showFooterFeedback, updateStatus, updateTelemetry } from './status-ui.js';
 import { clearSequencerTimeline } from './timeline-ui.js';
 import { initWorkflowLibrary, loadWorkflowDraft, syncWorkflowEditorFeedback } from './workflow-library.js';
 
 let sequenceRunning = false;
 let lastHeartbeatLogSignature = null;
-let dashboardIoTimer = null;
-let dashboardIoBusy = false;
-let dashboardSetupTimer = null;
-let dashboardSetupBusy = false;
-let lastDashboardSetupError = null;
 
-const DASHBOARD_IO_POLL_MS = 250;
-const DASHBOARD_SETUP_POLL_MS = 10;
-const ACTIVE_IO_OUTPUT_PINS = ['PIN8', 'PIN10'];
+const ACTIVE_IO_OUTPUT_PINS = ['PIN15', 'PIN1'];
 
 function getIoDigitalState(entry) {
   if (!entry) {
@@ -55,6 +48,10 @@ function getModeSwitchBlockedMessage(action = 'switch') {
 function isManualControlActive() {
   const telemetry = getResolvedTelemetry(runtimeState.lastTelemetry || {});
 
+  if (runtimeState.connections?.teensy) {
+    return Boolean(runtimeState.hornScanRunning || telemetry.active || telemetry.seek);
+  }
+
   return Boolean(
     runtimeState.hornScanRunning
     ||
@@ -70,6 +67,10 @@ function isBransonRunIndicatorActive() {
   }
 
   const telemetry = getResolvedTelemetry(runtimeState.lastTelemetry || {});
+
+  if (runtimeState.connections?.teensy) {
+    return Boolean(telemetry.active || telemetry.seek);
+  }
 
   if (runtimeState.connections?.ethernet) {
     return ACTIVE_IO_OUTPUT_PINS.some((pin) => isIoOutputActive(pin));
@@ -104,158 +105,47 @@ function isOnline() {
   return String(runtimeState.status || 'offline').toLowerCase() === 'online';
 }
 
-function applyDashboardAmplitudeRange() {
+function hasDashboardEthernetTransport() {
+  return Boolean(runtimeState.simulation || runtimeState.connections?.ethernet);
+}
+
+function hasDashboardTeensyTransport() {
+  return Boolean(runtimeState.simulation || runtimeState.connections?.teensy);
+}
+
+function syncDashboardManualControlState() {
+  const executionActive = Boolean(sequenceRunning || runtimeState.workflowRunning || runtimeState.hornScanRunning);
+  const hasEthernetTransport = hasDashboardEthernetTransport();
+  const hasTeensyTransport = hasDashboardTeensyTransport();
+  const startButton = $('start-btn');
+  const stopButton = $('stop-btn');
+  const seekButton = $('seek-btn');
+  const resetButton = $('reset-btn');
   const amplitudeInput = $('amplitude-input');
-  const amplitudeRange = $('amplitude-input-range');
-  const metadata = runtimeState.setupMetadata?.weldAmp || {};
-  const hasMin = metadata.min != null && metadata.min !== '';
-  const hasMax = metadata.max != null && metadata.max !== '';
+
+  if (startButton) {
+    startButton.disabled = executionActive || !hasTeensyTransport;
+  }
+
+  if (seekButton) {
+    seekButton.disabled = executionActive || !hasEthernetTransport;
+  }
+
+  if (resetButton) {
+    resetButton.disabled = executionActive || !hasEthernetTransport;
+  }
 
   if (amplitudeInput) {
-    if (hasMin) {
-      amplitudeInput.min = String(metadata.min);
-    } else {
-      amplitudeInput.removeAttribute('min');
-    }
-
-    if (hasMax) {
-      amplitudeInput.max = String(metadata.max);
-    } else {
-      amplitudeInput.removeAttribute('max');
-    }
+    amplitudeInput.disabled = executionActive || !hasEthernetTransport;
   }
 
-  if (amplitudeRange) {
-    amplitudeRange.textContent = hasMin && hasMax
-      ? t('settings.setup.rangeIndicator', 'Range: {min} to {max}')
-        .replace('{min}', String(metadata.min))
-        .replace('{max}', String(metadata.max))
-      : '';
+  if (stopButton) {
+    stopButton.disabled = runtimeState.hornScanRunning
+      ? true
+      : (sequenceRunning || runtimeState.workflowRunning)
+        ? false
+        : !hasTeensyTransport;
   }
-}
-
-function canPollDashboardSetup() {
-  return runtimeState.currentView === 'dashboard'
-    && !runtimeState.hornScanRunning
-    && typeof window.api?.dcx?.getSetup === 'function'
-    && shouldUseSetupRealtimeData(runtimeState.lastTelemetry || {});
-}
-
-function stopDashboardSetupPolling() {
-  if (dashboardSetupTimer) {
-    window.clearInterval(dashboardSetupTimer);
-    dashboardSetupTimer = null;
-  }
-
-  dashboardSetupBusy = false;
-  lastDashboardSetupError = null;
-  refreshRealtimeDataDisplay(runtimeState.lastTelemetry || {});
-  applyDashboardAmplitudeRange();
-}
-
-async function pollDashboardSetupReadback() {
-  if (dashboardSetupBusy || !canPollDashboardSetup()) {
-    return;
-  }
-
-  dashboardSetupBusy = true;
-
-  try {
-    const res = await window.api.dcx.getSetup();
-    if (!res?.success || !shouldUseSetupRealtimeData(runtimeState.lastTelemetry || {})) {
-      return;
-    }
-
-    runtimeState.setupConfig = res.settings && typeof res.settings === 'object'
-      ? { ...runtimeState.setupConfig, ...res.settings }
-      : runtimeState.setupConfig;
-    runtimeState.setupMetadata = res.metadata && typeof res.metadata === 'object'
-      ? { ...runtimeState.setupMetadata, ...res.metadata }
-      : runtimeState.setupMetadata;
-
-    refreshRealtimeDataDisplay(runtimeState.lastTelemetry || {});
-    applyDashboardAmplitudeRange();
-    lastDashboardSetupError = null;
-  } catch (error) {
-    if (lastDashboardSetupError !== error.message) {
-      log({ dashboard_setup_error: error.message });
-      lastDashboardSetupError = error.message;
-    }
-  } finally {
-    dashboardSetupBusy = false;
-  }
-}
-
-function syncDashboardSetupPollingState() {
-  if (!canPollDashboardSetup()) {
-    stopDashboardSetupPolling();
-    return;
-  }
-
-  if (dashboardSetupTimer) {
-    return;
-  }
-
-  pollDashboardSetupReadback();
-  dashboardSetupTimer = window.setInterval(pollDashboardSetupReadback, DASHBOARD_SETUP_POLL_MS);
-}
-
-function canPollDashboardIoIndicators() {
-  return runtimeState.currentView === 'dashboard'
-    && !runtimeState.hornScanRunning
-    && !runtimeState.simulation
-    && Boolean(runtimeState.connections?.ethernet)
-    && typeof window.api?.dcx?.getIoBootstrapSnapshot === 'function';
-}
-
-function stopDashboardIoPolling({ clearSnapshot = false } = {}) {
-  if (dashboardIoTimer) {
-    window.clearInterval(dashboardIoTimer);
-    dashboardIoTimer = null;
-  }
-
-  dashboardIoBusy = false;
-
-  if (clearSnapshot) {
-    runtimeState.ioSnapshot = null;
-    updateTelemetry(runtimeState.lastTelemetry || {});
-  }
-}
-
-async function pollDashboardIoIndicators() {
-  if (dashboardIoBusy || !canPollDashboardIoIndicators()) {
-    return;
-  }
-
-  dashboardIoBusy = true;
-
-  try {
-    const ioSnapshot = await window.api.dcx.getIoBootstrapSnapshot();
-    if (!ioSnapshot?.success) {
-      return;
-    }
-
-    runtimeState.ioSnapshot = ioSnapshot;
-    updateTelemetry(runtimeState.lastTelemetry || {});
-  } catch (error) {
-    log({ dashboard_io_error: error.message });
-  } finally {
-    dashboardIoBusy = false;
-  }
-}
-
-function syncDashboardIoPollingState() {
-  if (!canPollDashboardIoIndicators()) {
-    stopDashboardIoPolling({ clearSnapshot: !runtimeState.connections?.ethernet || runtimeState.simulation });
-    return;
-  }
-
-  if (dashboardIoTimer) {
-    return;
-  }
-
-  pollDashboardIoIndicators();
-  dashboardIoTimer = window.setInterval(pollDashboardIoIndicators, DASHBOARD_IO_POLL_MS);
 }
 
 function syncModeSwitchUiState() {
@@ -279,9 +169,6 @@ function syncModeSwitchUiState() {
   if (stopButton) {
     stopButton.disabled = modeSwitchBusy || !isOnline() || bransonRunIndicatorActive;
   }
-
-  syncDashboardIoPollingState();
-  syncDashboardSetupPollingState();
 }
 
 function updateWorkflowFileLabel() {
@@ -380,7 +267,7 @@ function syncWorkflowUiLockState() {
     clearTimelineButton.disabled = executionActive;
   }
 
-  ['seq-auto-abort', 'seq-loop-count', 'seq-name'].forEach((id) => {
+  ['seq-auto-abort', 'seq-loop-count', 'seq-name', 'seq-flash-before-run'].forEach((id) => {
     const element = $(id);
     if (!element) return;
 
@@ -389,6 +276,7 @@ function syncWorkflowUiLockState() {
 
   syncSequenceEditorUi(executionActive);
   syncModeSwitchUiState();
+  syncDashboardManualControlState();
 }
 
 function setWorkflowUiState(status = {}) {
@@ -493,7 +381,7 @@ function setSequenceUiState(status = {}) {
     template.classList.toggle('opacity-50', sequenceRunning);
   });
 
-  ['seq-auto-abort', 'seq-loop-count', 'seq-name'].forEach((id) => {
+  ['seq-auto-abort', 'seq-loop-count', 'seq-name', 'seq-flash-before-run'].forEach((id) => {
     const element = $(id);
     if (!element) return;
 
@@ -514,7 +402,8 @@ function readSequenceRequest() {
     timeline: getTimeline(),
     options: {
       loopCount: $('seq-loop-count')?.value || '1',
-      autoAbort: $('seq-auto-abort')?.value || 'ALARM'
+      autoAbort: $('seq-auto-abort')?.value || 'ALARM',
+      flashBeforeRun: $('seq-flash-before-run')?.value === 'SELECTED_FIRMWARE'
     }
   };
 }
@@ -983,11 +872,27 @@ async function updateAmplitudeFromUi() {
 async function ensureHardwareConnectedForStart() {
   const simulationSelected = $('sim-mode-toggle')?.value === 'true';
 
-  if (simulationSelected || isOnline()) {
+  if (simulationSelected) {
     return { success: true };
   }
 
-  return connectDCX();
+  if (!isOnline()) {
+    const connectionResult = await connectDCX();
+    if (!connectionResult?.success) {
+      return connectionResult;
+    }
+  }
+
+  if (runtimeState.connections?.teensy) {
+    return { success: true };
+  }
+
+  const result = {
+    success: false,
+    error: 'Teensy serial transport is not connected'
+  };
+  showFooterFeedback(result.error, { tone: 'error', timeout: 8000 });
+  return result;
 }
 
 export function initAmplitudeEnter() {
@@ -1033,20 +938,23 @@ export function initButtons() {
     hideConnectionFailurePopup();
   });
 
-  document.addEventListener('app:telemetry-updated', syncModeSwitchUiState);
+  document.addEventListener('app:telemetry-updated', () => {
+    syncModeSwitchUiState();
+  });
 
   $('start-btn')?.addEventListener('click', async () => {
-    const amp = readUiAmplitude({ fallback: 50 });
-    if (amp == null) {
-      return;
-    }
-
     const connectionResult = await ensureHardwareConnectedForStart();
     if (!connectionResult?.success) {
       return;
     }
 
-    await control('start', amp);
+    const shouldUseEthernetAmplitude = hasDashboardEthernetTransport();
+    const amp = shouldUseEthernetAmplitude ? readUiAmplitude({ fallback: 50 }) : null;
+    if (shouldUseEthernetAmplitude && amp == null) {
+      return;
+    }
+
+    await control('start', shouldUseEthernetAmplitude ? amp : undefined);
   });
 
   $('stop-btn')?.addEventListener('click', async () => {
@@ -1104,9 +1012,21 @@ export function initButtons() {
   $('load-workflow-btn')?.addEventListener('click', loadWorkflowScriptFromFile);
   $('save-workflow-btn')?.addEventListener('click', saveWorkflowScriptToFile);
 
-  $('clear-branson-mem-btn')?.addEventListener('click', () => {
-    log('CLR command is not implemented yet.');
-    showFooterFeedback('Memory wipe is not implemented yet.', { tone: 'warning', timeout: 7000 });
+  $('restore-factory-settings-btn')?.addEventListener('click', async () => {
+    try {
+      const result = await window.api?.teensy?.restoreFactoryFirmware?.();
+      log({ teensy_factory_restore: result });
+
+      if (!result?.success) {
+        showFooterFeedback(result?.error || result?.message || 'Factory restore failed.', { tone: 'error', timeout: 8000 });
+        return;
+      }
+
+      showFooterFeedback('Factory Teensy firmware restored.', { tone: 'success', timeout: 6000 });
+    } catch (error) {
+      log({ teensy_factory_restore_error: error.message });
+      showFooterFeedback(`Factory restore failed: ${error.message}`, { tone: 'error', timeout: 8000 });
+    }
   });
 
   document.addEventListener('app:language-changed', () => {
@@ -1114,14 +1034,8 @@ export function initButtons() {
     setWorkflowUiState(runtimeState.workflowStatus || { isRunning: runtimeState.workflowRunning, message: t('workflow.status.idle', 'IDLE') });
   });
 
-  document.addEventListener('app:view-changed', () => {
-    syncDashboardIoPollingState();
-    syncDashboardSetupPollingState();
-  });
-
   document.addEventListener('app:status-updated', () => {
-    syncDashboardIoPollingState();
-    syncDashboardSetupPollingState();
+    syncDashboardManualControlState();
   });
 
   document.addEventListener('app:horn-scan-state', () => {
@@ -1132,8 +1046,8 @@ export function initButtons() {
 
   syncWorkflowUiLockState();
   syncModeSwitchUiState();
+  syncDashboardManualControlState();
   updateWorkflowFileLabel();
-  syncDashboardIoPollingState();
 }
 
 export function heartbeatLoop() {

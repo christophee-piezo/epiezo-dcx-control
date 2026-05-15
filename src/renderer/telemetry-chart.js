@@ -17,6 +17,10 @@ let telemetryChart = null;
 let telemetrySamples = [];
 let telemetryChartPaused = true;
 
+function syncSerialTelemetryGate(enabled) {
+  window.api?.dcx?.setSerialTelemetryEnabled?.(enabled).catch(() => {});
+}
+
 function getAxisSelection(axis) {
   const fallback = axis === 'x' ? 'time' : 'frequency';
   return $(axis === 'x' ? 'chart-x-axis' : 'chart-y-axis')?.value || fallback;
@@ -54,11 +58,13 @@ function syncTelemetryPlaybackUiState() {
 
 export function playTelemetryChart() {
   telemetryChartPaused = false;
+  syncSerialTelemetryGate(true);
   syncTelemetryPlaybackUiState();
 }
 
 export function pauseTelemetryChart() {
   telemetryChartPaused = true;
+  syncSerialTelemetryGate(false);
   syncTelemetryPlaybackUiState();
 }
 
@@ -250,5 +256,6 @@ export function initializeTelemetryChart() {
   document.addEventListener('app:language-changed', rebuildTelemetryChart);
 
   syncTelemetryPlaybackUiState();
+  syncSerialTelemetryGate(!telemetryChartPaused);
   rebuildTelemetryChart();
 }

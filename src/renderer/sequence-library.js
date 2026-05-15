@@ -64,7 +64,8 @@ function createSequenceId() {
 function readSequenceOptionsFromUi() {
   return {
     loopCount: $('seq-loop-count')?.value || '1',
-    autoAbort: $('seq-auto-abort')?.value || 'ALARM'
+    autoAbort: $('seq-auto-abort')?.value || 'ALARM',
+    flashBeforeRun: $('seq-flash-before-run')?.value === 'SELECTED_FIRMWARE'
   };
 }
 
@@ -75,6 +76,10 @@ function applySequenceOptionsToUi(options = {}) {
 
   if ($('seq-auto-abort')) {
     $('seq-auto-abort').value = options.autoAbort === 'NEVER' ? 'NEVER' : 'ALARM';
+  }
+
+  if ($('seq-flash-before-run')) {
+    $('seq-flash-before-run').value = options.flashBeforeRun ? 'SELECTED_FIRMWARE' : 'DISABLED';
   }
 }
 
@@ -116,7 +121,8 @@ function normalizeSavedSequences(value) {
         timeline: normalizeSequenceTimeline(sequence.timeline, fallbackRamp),
         options: {
           loopCount: String(sequence.options?.loopCount || '1'),
-          autoAbort: sequence.options?.autoAbort === 'NEVER' ? 'NEVER' : 'ALARM'
+          autoAbort: sequence.options?.autoAbort === 'NEVER' ? 'NEVER' : 'ALARM',
+          flashBeforeRun: Boolean(sequence.options?.flashBeforeRun)
         },
         createdAt: sequence.createdAt || Date.now(),
         updatedAt: sequence.updatedAt || Date.now()
@@ -497,7 +503,7 @@ function bindEditorDirtyState() {
 
   document.body.dataset.sequenceEditorDirtyStateBound = 'true';
 
-  ['seq-name', 'seq-loop-count', 'seq-auto-abort'].forEach((id) => {
+  ['seq-name', 'seq-loop-count', 'seq-auto-abort', 'seq-flash-before-run'].forEach((id) => {
     const element = $(id);
     if (!element) return;
 

@@ -14,6 +14,7 @@ const DEFAULT_SIGNATURE_DRAW_FROM = 0;
 const DEFAULT_SIGNATURE_DRAW_TO = WELD_DATA_CAPTURE_MS;
 const DEFAULT_HORN_SCAN_DRAW_FROM = 38900;
 const DEFAULT_HORN_SCAN_DRAW_TO = 40900;
+const ROUTING_FIELD_IDS = ['route-amplitude', 'route-seek', 'route-reset'];
 const SETUP_INPUT_FIELDS = {
   weldAmp: {
     inputId: 'amplitude-input',
@@ -67,10 +68,10 @@ const IO_INPUT_INDICATORS = [
   ['PIN4', 'settings-io-input-memory-clear']
 ];
 const IO_OUTPUT_INDICATORS = [
-  ['PIN7', 'settings-io-output-ready', 'ready'],
-  ['PIN8', 'settings-io-output-active', 'active'],
-  ['PIN9', 'settings-io-output-alarm', 'alarm'],
-  ['PIN10', 'settings-io-output-seek', 'seek']
+  ['PIN14', 'settings-io-output-ready', 'ready'],
+  ['PIN15', 'settings-io-output-active', 'active'],
+  ['PIN0', 'settings-io-output-alarm', 'alarm'],
+  ['PIN1', 'settings-io-output-seek', 'seek']
 ];
 const IO_ANALOG_INPUT_READINGS = [
   ['PIN17', 'settings-io-amplitude-in'],
@@ -183,6 +184,8 @@ let hornScanProgressPercent = 0;
 let hornScanProgressMessage = '';
 let hornScanProgressSubscriptionActive = false;
 let hornScanStatusLoading = false;
+let teensyFlashStatus = null;
+let teensyFlashStatusSubscriptionActive = false;
 
 function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value));
@@ -432,6 +435,159 @@ function bindSetupControls() {
   ];
 
   buttonBindings.forEach(([id, handler]) => {
+    const element = $(id);
+    if (!element || element.dataset.bound === 'true') {
+      return;
+    }
+
+    element.dataset.bound = 'true';
+    element.addEventListener('click', handler);
+  });
+}
+
+function formatTeensyFlashDisplayPath(value, fallback) {
+  return value || fallback;
+}
+
+function formatTeensyFlashStatus(status = teensyFlashStatus || {}) {
+  if (status.state === 'flashing') {
+    return t('settings.teensyFlash.status.flashing', 'Flashing Teensy...');
+  }
+
+  if (status.state === 'completed') {
+    return t('settings.teensyFlash.status.completed', 'Teensy flash completed.');
+  }
+
+  if (status.state === 'error') {
+    return `${t('settings.teensyFlash.status.error', 'Teensy flash failed.')}: ${status.error || ''}`.trim();
+  }
+
+  if (status.firmwarePath) {
+    return t('settings.teensyFlash.status.ready', 'Ready to flash the selected Teensy firmware.');
+  }
+
+  return t('settings.teensyFlash.status.selectFirmware', 'Select a .hex firmware file to enable Teensy flashing.');
+}
+
+function renderTeensyFlashStatus(status = teensyFlashStatus || {}) {
+  teensyFlashStatus = status;
+
+  const loaderInput = $('settings-teensy-loader-path');
+  if (loaderInput) {
+    loaderInput.value = formatTeensyFlashDisplayPath(
+      status.cliPath,
+      t('settings.teensyFlash.loaderPathFallback', 'Using PATH: teensy_loader_cli.exe')
+    );
+  }
+
+  const firmwareInput = $('settings-teensy-firmware-path');
+  if (firmwareInput) {
+    firmwareInput.value = formatTeensyFlashDisplayPath(status.firmwarePath, '');
+  }
+
+  const statusLabel = $('settings-teensy-flash-status');
+  if (statusLabel) {
+    statusLabel.textContent = formatTeensyFlashStatus(status);
+  }
+
+  ['settings-teensy-loader-btn', 'settings-teensy-firmware-btn'].forEach((id) => {
+    const button = $(id);
+    if (button) {
+      button.disabled = Boolean(status.isRunning);
+    }
+  });
+
+  const flashButton = $('settings-teensy-flash-btn');
+  if (flashButton) {
+    flashButton.disabled = Boolean(status.isRunning || !status.firmwarePath);
+    flashButton.textContent = status.isRunning
+      ? t('settings.teensyFlash.flashBusy', 'Flashing...')
+      : t('settings.teensyFlash.flash', 'Flash Teensy');
+  }
+}
+
+async function hydrateTeensyFlashStatus() {
+  if (typeof window.api?.teensy?.getStatus !== 'function') {
+    return;
+  }
+
+  try {
+    const status = await window.api.teensy.getStatus();
+    renderTeensyFlashStatus(status || {});
+  } catch (error) {
+    renderTeensyFlashStatus({
+      state: 'error',
+      error: error.message,
+      isRunning: false
+    });
+  }
+}
+
+async function selectTeensyLoaderCli() {
+  if (typeof window.api?.teensy?.selectCli !== 'function') {
+    showFooterFeedback('Teensy Loader CLI selection is unavailable.', { tone: 'error', timeout: 8000 });
+    return;
+  }
+
+  try {
+    const result = await window.api.teensy.selectCli();
+    if (!result?.success) {
+      return;
+    }
+
+    renderTeensyFlashStatus(result.status || teensyFlashStatus || {});
+    showFooterFeedback(`Teensy Loader CLI selected: ${result.fileName || 'teensy_loader_cli.exe'}`, { tone: 'success', timeout: 4000 });
+  } catch (error) {
+    showFooterFeedback(`CLI selection failed: ${error.message}`, { tone: 'error', timeout: 8000 });
+  }
+}
+
+async function selectTeensyFirmware() {
+  if (typeof window.api?.teensy?.selectFirmware !== 'function') {
+    showFooterFeedback('Teensy firmware selection is unavailable.', { tone: 'error', timeout: 8000 });
+    return;
+  }
+
+  try {
+    const result = await window.api.teensy.selectFirmware();
+    if (!result?.success) {
+      return;
+    }
+
+    renderTeensyFlashStatus(result.status || teensyFlashStatus || {});
+    showFooterFeedback(`Teensy firmware selected: ${result.fileName || 'firmware.hex'}`, { tone: 'success', timeout: 4000 });
+  } catch (error) {
+    showFooterFeedback(`Firmware selection failed: ${error.message}`, { tone: 'error', timeout: 8000 });
+  }
+}
+
+async function flashSelectedTeensyFirmware() {
+  if (typeof window.api?.teensy?.flash !== 'function') {
+    showFooterFeedback('Teensy flashing is unavailable.', { tone: 'error', timeout: 8000 });
+    return;
+  }
+
+  try {
+    const result = await window.api.teensy.flash();
+    if (!result?.success) {
+      showFooterFeedback(result?.error || result?.message || 'Teensy flash failed.', { tone: 'error', timeout: 8000 });
+      return;
+    }
+
+    showFooterFeedback('Teensy flash completed.', { tone: 'success', timeout: 5000 });
+  } catch (error) {
+    showFooterFeedback(`Teensy flash failed: ${error.message}`, { tone: 'error', timeout: 8000 });
+  }
+}
+
+function bindTeensyFlashControls() {
+  const bindings = [
+    ['settings-teensy-loader-btn', selectTeensyLoaderCli],
+    ['settings-teensy-firmware-btn', selectTeensyFirmware],
+    ['settings-teensy-flash-btn', flashSelectedTeensyFirmware]
+  ];
+
+  bindings.forEach(([id, handler]) => {
     const element = $(id);
     if (!element || element.dataset.bound === 'true') {
       return;
@@ -715,6 +871,20 @@ function setActiveSettingsTab(tab) {
   if (activeSettingsTab === 'signature' && isHornSignatureMode()) {
     refreshHornScanTabStatus();
   }
+}
+
+function syncRoutingControlDefaults() {
+  const hasEthernetConnection = Boolean(runtimeState.connections?.ethernet) && !runtimeState.simulation;
+
+  ROUTING_FIELD_IDS.forEach((id) => {
+    const select = $(id);
+    if (!select) {
+      return;
+    }
+
+    select.disabled = !hasEthernetConnection;
+    select.value = hasEthernetConnection ? 'http' : 'mode';
+  });
 }
 
 function bindSettingsTabs() {
@@ -2166,14 +2336,26 @@ export function initializeSettingsPage() {
     });
   }
 
+  if (!teensyFlashStatusSubscriptionActive && typeof window.api?.teensy?.onStatus === 'function') {
+    teensyFlashStatusSubscriptionActive = true;
+    window.api.teensy.onStatus((status) => {
+      document.dispatchEvent(new CustomEvent('app:teensy-flash-status', {
+        detail: status || {}
+      }));
+    });
+  }
+
   bindSettingsTabs();
   setActiveSettingsTab(activeSettingsTab);
   initializeSignatureChart();
   bindSetupControls();
+  bindTeensyFlashControls();
   bindSignatureControls();
   setActiveSignatureMode(activeSignatureMode, { clearGraph: false });
+  syncRoutingControlDefaults();
   applySetupConfiguration(runtimeState.setupConfig || {}, runtimeState.setupMetadata || {}, { persist: false });
   renderSystemInfo(runtimeState.systemInfo);
+  hydrateTeensyFlashStatus();
   refreshIoSummary();
   renderHornScanStatusUi();
   refreshSignatureSummary(runtimeState.lastTelemetry);
@@ -2190,6 +2372,7 @@ export function initializeSettingsPage() {
   });
 
   document.addEventListener('app:status-updated', () => {
+    syncRoutingControlDefaults();
     syncIoPollingState();
 
     if (canLoadSetupConfiguration()) {
@@ -2215,6 +2398,10 @@ export function initializeSettingsPage() {
     applyHornScanProgress(event.detail || {});
   });
 
+  document.addEventListener('app:teensy-flash-status', (event) => {
+    renderTeensyFlashStatus(event.detail || {});
+  });
+
   document.addEventListener('app:system-info-updated', (event) => {
     renderSystemInfo(event.detail || runtimeState.systemInfo || {});
   });
@@ -2224,6 +2411,7 @@ export function initializeSettingsPage() {
     setActiveSignatureMode(activeSignatureMode, { clearGraph: false });
     applySetupConfiguration(runtimeState.setupConfig || {}, runtimeState.setupMetadata || {}, { persist: false });
     renderSystemInfo(runtimeState.systemInfo);
+    renderTeensyFlashStatus(teensyFlashStatus || {});
     renderHornScanStatusUi();
     refreshSignatureSummary(runtimeState.lastTelemetry);
     updateSignatureValueReadout();

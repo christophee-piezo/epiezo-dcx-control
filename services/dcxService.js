@@ -44,10 +44,10 @@ const DEFAULT_SETUP_SETTINGS = {
 };
 const STATUS_SIGNAL_FIELDS = ['ready', 'active', 'alarm', 'seek'];
 const STATUS_SIGNAL_PINS = {
-  ready: 'PIN7',
-  active: 'PIN8',
-  alarm: 'PIN9',
-  seek: 'PIN10'
+  ready: 'PIN14',
+  active: 'PIN15',
+  alarm: 'PIN0',
+  seek: 'PIN1'
 };
 
 function averageFiniteValues(values = []) {
@@ -145,6 +145,8 @@ class DcxService extends EventEmitter {
     this.httpRequestCount = 0;
     this.ioSnapshot = null;
     this.setupMetadata = {};
+    this.serialTelemetryEnabled = false;
+    this.serialTelemetryForced = false;
 
     this.telemetry = {
       deviceStatus: 'Disconnected',
@@ -171,7 +173,7 @@ class DcxService extends EventEmitter {
     };
 
     this.serialService.on('data', (data) => {
-      if (!this.simulation && this.serialService.isConnected()) {
+      if (!this.simulation && this.serialService.isConnected() && (this.serialTelemetryEnabled || this.serialTelemetryForced)) {
         this.updateTelemetry(data, { source: 'serial' });
       }
     });
@@ -216,7 +218,7 @@ class DcxService extends EventEmitter {
   updateTelemetry(data, { source = 'unknown' } = {}) {
     const sanitizedTelemetry = { ...data };
 
-    if (source === 'serial' && this.ethernetConnected) {
+    if (source === 'http' && this.serialService.isConnected()) {
       STATUS_SIGNAL_FIELDS.forEach((field) => {
         delete sanitizedTelemetry[field];
       });
@@ -330,6 +332,15 @@ class DcxService extends EventEmitter {
     return {
       ethernet: Boolean(this.ethernetConnected),
       teensy: Boolean(this.serialService.isConnected())
+    };
+  }
+
+  setSerialTelemetryEnabled(enabled) {
+    this.serialTelemetryEnabled = Boolean(enabled);
+
+    return {
+      success: true,
+      enabled: this.serialTelemetryEnabled
     };
   }
 
@@ -514,6 +525,8 @@ class DcxService extends EventEmitter {
   async connect(config) {
     const nextConfig = this.normalizeConfig(config);
 
+    this.serialTelemetryForced = false;
+
     if (this.hasActiveOperation()) {
       return {
         success: false,
@@ -634,6 +647,8 @@ class DcxService extends EventEmitter {
   }
 
   async disconnect() {
+    this.serialTelemetryForced = false;
+
     if (this.hasActiveOperation()) {
       return {
         success: false,
@@ -856,18 +871,35 @@ class DcxService extends EventEmitter {
 
         switch (action) {
           case 'start':
+            if (this.getTelemetrySnapshot().alarm) {
+              return {
+                success: false,
+                error: 'Cannot start sonics while an alarm is active'
+              };
+            }
+
+            {
+              const previousSerialTelemetryForced = this.serialTelemetryForced;
+            this.serialTelemetryForced = true;
+
             if (typeof value === 'number' && !Number.isNaN(value)) {
               value = this.parseAmplitudeValue(value, 'Start amplitude');
 
               if (this.ethernetConnected) {
                 const amplitudeUpdate = await this.setParameters({ weldAmp: value });
                 if (!amplitudeUpdate?.success) {
+                  this.serialTelemetryForced = previousSerialTelemetryForced;
                   return amplitudeUpdate;
                 }
               }
             }
 
-            result = this.runSerialCommand('START');
+            try {
+              result = this.runSerialCommand('START');
+            } catch (error) {
+              this.serialTelemetryForced = previousSerialTelemetryForced;
+              throw error;
+            }
 
             if (typeof value === 'number' && !this.ethernetConnected) {
               result = {
@@ -875,9 +907,13 @@ class DcxService extends EventEmitter {
                 warning: 'Amplitude update skipped because Ethernet transport is not connected'
               };
             }
+            }
             break;
           case 'stop':
             result = this.runSerialCommand('STOP');
+            if (!this.serialTelemetryEnabled) {
+              this.serialTelemetryForced = false;
+            }
             break;
           case 'seek':
             result = await this._post(13, 9);
@@ -995,7 +1031,7 @@ class DcxService extends EventEmitter {
       const nextTelemetry = extractTelemetryFromRaw(res.data);
 
       if (Object.keys(nextTelemetry).length) {
-        this.updateTelemetry(nextTelemetry);
+        this.updateTelemetry(nextTelemetry, { source: 'http' });
       }
 
       this.setConnectionState({ status: 'online', ethernetConnected: true });
