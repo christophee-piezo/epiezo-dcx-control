@@ -28,6 +28,64 @@ const ioAnalogOutputs = [
   { id: 'settings-io-amplitude-out', pin: 'J3-25', label: 'Amplitude Out (V)', key: 'settings.io.amplitudeOut', value: '00.00' }
 ];
 
+const ioConfigurationDigitalInputOptions = [
+  { value: 'unassign', label: 'UNASSIGN', key: 'settings.io.unassign' },
+  { value: 'externalReset', label: 'External Reset', key: 'settings.io.externalReset' },
+  { value: 'externalSeek', label: 'External Seek', key: 'settings.io.externalSeek' },
+  { value: 'externalStart', label: 'External Start', key: 'settings.io.externalStart' },
+  { value: 'externalTest', label: 'External Test', key: 'settings.io.externalTest' },
+  { value: 'memoryClear', label: 'Memory Clear', key: 'settings.io.memoryClear' },
+  { value: 'extHornScan', label: 'Ext Horn Scan', key: 'settings.io.extHornScan' },
+  { value: 'displayLock', label: 'Display Lock', key: 'settings.io.displayLock' },
+  { value: 'cableDetect', label: 'Cable Detect', key: 'settings.io.cableDetect' }
+];
+
+const ioConfigurationDigitalOutputOptions = [
+  { value: 'unassign', label: 'UNASSIGN', key: 'settings.io.unassign' },
+  { value: 'ready', label: 'Ready', key: 'settings.io.ready' },
+  { value: 'sonicsActive', label: 'Sonics Active', key: 'settings.io.sonicsActiveLabel' },
+  { value: 'generalAlarm', label: 'General Alarm', key: 'settings.io.generalAlarmLabel' },
+  { value: 'overloadAlarm', label: 'Overload Alarm', key: 'settings.io.overloadAlarm' },
+  { value: 'seekScanOut', label: 'Seek/Scan Out', key: 'settings.io.seekScanOut' }
+];
+
+const ioConfigurationAnalogInputOptions = [
+  { value: 'unassign', label: 'UNASSIGN', key: 'settings.io.unassign' },
+  { value: 'amplitudeIn', label: 'Amplitude In', key: 'settings.io.amplitudeInShort' },
+  { value: 'frequencyOffset', label: 'Frequency Offset', key: 'settings.io.frequencyOffsetShort' }
+];
+
+const ioConfigurationAnalogOutputOptions = [
+  { value: 'unassign', label: 'UNASSIGN', key: 'settings.io.unassign' },
+  { value: 'frequencyOut', label: 'Frequency Out', key: 'settings.io.frequencyOut' },
+  { value: 'powerOut', label: 'Power Out', key: 'settings.io.powerOutShort' },
+  { value: 'amplitudeOut', label: 'Amplitude Out', key: 'settings.io.amplitudeOutShort' }
+];
+
+const ioConfigurationDigitalInputs = [
+  { pin: 'J3 - 1', checkboxId: 'settings-io-config-input-1-enabled', selectId: 'settings-io-config-input-1-select', voltageName: 'settings-io-config-input-1-voltage', defaultValue: 'externalStart' },
+  { pin: 'J3 - 2', checkboxId: 'settings-io-config-input-2-enabled', selectId: 'settings-io-config-input-2-select', voltageName: 'settings-io-config-input-2-voltage', defaultValue: 'externalSeek' },
+  { pin: 'J3 - 3', checkboxId: 'settings-io-config-input-3-enabled', selectId: 'settings-io-config-input-3-select', voltageName: 'settings-io-config-input-3-voltage', defaultValue: 'externalReset' },
+  { pin: 'J3 - 4', checkboxId: 'settings-io-config-input-4-enabled', selectId: 'settings-io-config-input-4-select', voltageName: 'settings-io-config-input-4-voltage', defaultValue: 'memoryClear' }
+];
+
+const ioConfigurationDigitalOutputs = [
+  { pin: 'J3 - 7', checkboxId: 'settings-io-config-output-7-enabled', selectId: 'settings-io-config-output-7-select', voltageName: 'settings-io-config-output-7-voltage', defaultValue: 'ready' },
+  { pin: 'J3 - 8', checkboxId: 'settings-io-config-output-8-enabled', selectId: 'settings-io-config-output-8-select', voltageName: 'settings-io-config-output-8-voltage', defaultValue: 'sonicsActive' },
+  { pin: 'J3 - 9', checkboxId: 'settings-io-config-output-9-enabled', selectId: 'settings-io-config-output-9-select', voltageName: 'settings-io-config-output-9-voltage', defaultValue: 'generalAlarm' },
+  { pin: 'J3 - 10', checkboxId: 'settings-io-config-output-10-enabled', selectId: 'settings-io-config-output-10-select', voltageName: 'settings-io-config-output-10-voltage', defaultValue: 'seekScanOut' }
+];
+
+const ioConfigurationAnalogInputs = [
+  { pin: 'J3 - 17', checkboxId: 'settings-io-config-analog-input-17-enabled', selectId: 'settings-io-config-analog-input-17-select', defaultValue: 'amplitudeIn' },
+  { pin: 'J3 - 18', checkboxId: 'settings-io-config-analog-input-18-enabled', selectId: 'settings-io-config-analog-input-18-select', defaultValue: 'frequencyOffset' }
+];
+
+const ioConfigurationAnalogOutputs = [
+  { pin: 'J3 - 24', checkboxId: 'settings-io-config-analog-output-24-enabled', selectId: 'settings-io-config-analog-output-24-select', defaultValue: 'frequencyOut' },
+  { pin: 'J3 - 25', checkboxId: 'settings-io-config-analog-output-25-enabled', selectId: 'settings-io-config-analog-output-25-select', defaultValue: 'amplitudeOut' }
+];
+
 const weldSignatureStatusItems = [
   { id: 'settings-signature-status-seek', label: 'Seek', key: 'settings.signature.seek' }
 ];
@@ -219,6 +277,77 @@ function IoAnalogRow({ label, pin, translationKey, value, valueId }) {
       <span className="io-pin">{pin}</span>
       <span className="io-label" data-i18n={translationKey}>{label}</span>
       <span className="io-reading" id={valueId}>{value}</span>
+    </div>
+  );
+}
+
+function IoSubTabButton({ active = false, id, label, translationKey }) {
+  return (
+    <Button
+      className={active ? 'active flex-1 sm:flex-none' : 'flex-1 text-muted-foreground sm:flex-none'}
+      data-io-subtab={id}
+      id={`settings-io-subtab-${id}`}
+      size="sm"
+      type="button"
+      variant="ghost"
+    >
+      <span data-i18n={translationKey}>{label}</span>
+    </Button>
+  );
+}
+
+function IoConfigurationSection({ children, title, translationKey }) {
+  return (
+    <section className="rounded-2xl border border-border/70 bg-background/55 p-4 shadow-[inset_0_1px_0_hsl(var(--foreground)/0.04)]">
+      <div className="space-y-4">
+        <h3 className="text-[1.6rem] font-semibold uppercase tracking-[0.05em] text-foreground" data-i18n={translationKey}>{title}</h3>
+        <div className="grid gap-4">{children}</div>
+      </div>
+    </section>
+  );
+}
+
+function IoVoltageOption({ defaultChecked = false, id, label, name, value }) {
+  return (
+    <label className="inline-flex items-center gap-2 text-sm text-foreground/88">
+      <input className="size-4 accent-primary" defaultChecked={defaultChecked} id={id} name={name} type="radio" value={value} />
+      <span>{label}</span>
+    </label>
+  );
+}
+
+function IoConfigurationDigitalRow({ checkboxId, defaultValue, options, pin, selectId, voltageName }) {
+  return (
+    <div className="rounded-xl border border-border/60 bg-background/78 px-4 py-3 shadow-sm">
+      <div className="grid grid-cols-[4.75rem_1.25rem_minmax(0,1fr)_auto] items-center gap-3">
+        <div className="text-sm font-semibold uppercase tracking-[0.08em] text-foreground">{pin}</div>
+        <input className="size-4 accent-primary" defaultChecked id={checkboxId} type="checkbox" />
+        <NativeSelect className="h-9 w-full bg-background" defaultValue={defaultValue} id={selectId}>
+          {options.map((option) => (
+            <option data-i18n={option.key} key={option.value} value={option.value}>{option.label}</option>
+          ))}
+        </NativeSelect>
+        <div className="flex items-center justify-end gap-4 whitespace-nowrap">
+          <IoVoltageOption id={`${checkboxId}-0v`} label="0 V" name={voltageName} value="0" />
+          <IoVoltageOption defaultChecked id={`${checkboxId}-24v`} label="24 V" name={voltageName} value="24" />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function IoConfigurationAnalogRow({ checkboxId, defaultValue, options, pin, selectId }) {
+  return (
+    <div className="rounded-xl border border-border/60 bg-background/78 px-4 py-3 shadow-sm">
+      <div className="grid grid-cols-[4.75rem_1.25rem_minmax(0,1fr)] items-center gap-3">
+        <div className="text-sm font-semibold uppercase tracking-[0.08em] text-foreground">{pin}</div>
+        <input className="size-4 accent-primary" defaultChecked id={checkboxId} type="checkbox" />
+        <NativeSelect className="h-9 w-full bg-background" defaultValue={defaultValue} id={selectId}>
+          {options.map((option) => (
+            <option data-i18n={option.key} key={option.value} value={option.value}>{option.label}</option>
+          ))}
+        </NativeSelect>
+      </div>
     </div>
   );
 }
@@ -568,31 +697,37 @@ export function SettingsView() {
                   <CardDescription data-i18n="settings.io.description">Keep routing controls and live DCX I/O in one view.</CardDescription>
                 </CardHeader>
                 <CardContent className="grid gap-6">
-                  <section className="grid gap-4 rounded-xl border border-border/70 bg-background/55 p-4">
-                    <div className="space-y-1">
-                      <h3 className="text-base font-semibold text-foreground" data-i18n="settings.routing.title">Control Routing</h3>
-                      <p className="text-sm text-muted-foreground" data-i18n="settings.routing.description">Delegate each command family to Ethernet, serial, or the main mode.</p>
-                    </div>
+                  <div className="settings-tab-switch flex flex-wrap gap-1 rounded-xl border border-border/70 bg-background/70 p-1">
+                    <IoSubTabButton active id="diagnostic" label="Diagnostic" translationKey="settings.io.diagnostic" />
+                    <IoSubTabButton id="configuration" label="Configuration" translationKey="settings.io.configuration" />
+                  </div>
 
-                    <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-                      <RoutingField id="route-amplitude" label="Amplitude Control" />
-                      <RoutingField id="route-seek" label="Seek / Tune" />
-                      <RoutingField id="route-reset" label="Alarm Reset" />
-                    </div>
-                  </section>
+                  <div className="grid gap-6" data-io-subtab-panel="diagnostic">
+                    <section className="grid gap-4 rounded-xl border border-border/70 bg-background/55 p-4">
+                      <div className="space-y-1">
+                        <h3 className="text-base font-semibold text-foreground" data-i18n="settings.routing.title">Control Routing</h3>
+                        <p className="text-sm text-muted-foreground" data-i18n="settings.routing.description">Delegate each command family to Ethernet, serial, or the main mode.</p>
+                      </div>
 
-                  <div className="io-grid">
+                      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+                        <RoutingField id="route-amplitude" label="Amplitude Control" />
+                        <RoutingField id="route-seek" label="Seek / Tune" />
+                        <RoutingField id="route-reset" label="Alarm Reset" />
+                      </div>
+                    </section>
+
+                    <div className="io-grid">
                       <IoPanel title="Digital Inputs" translationKey="settings.io.digitalInputs">
                         {ioDigitalInputs.map((channel) => (
                           <IoDigitalRow indicatorId={channel.id} key={channel.pin} label={channel.label} pin={channel.pin} translationKey={channel.key} type="checkbox" />
                         ))}
                       </IoPanel>
 
-                    <IoPanel title="Digital Outputs" translationKey="settings.io.digitalOutputs">
-                      {ioDigitalOutputs.map((channel) => (
-                        <IoDigitalRow indicatorId={channel.id} key={channel.pin} label={channel.label} pin={channel.pin} translationKey={channel.key} type="checkbox" />
-                      ))}
-                    </IoPanel>
+                      <IoPanel title="Digital Outputs" translationKey="settings.io.digitalOutputs">
+                        {ioDigitalOutputs.map((channel) => (
+                          <IoDigitalRow indicatorId={channel.id} key={channel.pin} label={channel.label} pin={channel.pin} translationKey={channel.key} type="checkbox" />
+                        ))}
+                      </IoPanel>
 
                       <IoPanel title="Analog Inputs" translationKey="settings.io.analogInputs">
                         {ioAnalogInputs.map((channel) => (
@@ -600,11 +735,82 @@ export function SettingsView() {
                         ))}
                       </IoPanel>
 
-                    <IoPanel title="Analog Outputs" translationKey="settings.io.analogOutputs">
-                      {ioAnalogOutputs.map((channel) => (
-                        <IoAnalogRow key={channel.pin} label={channel.label} pin={channel.pin} translationKey={channel.key} value={channel.value} valueId={channel.id} />
-                      ))}
-                    </IoPanel>
+                      <IoPanel title="Analog Outputs" translationKey="settings.io.analogOutputs">
+                        {ioAnalogOutputs.map((channel) => (
+                          <IoAnalogRow key={channel.pin} label={channel.label} pin={channel.pin} translationKey={channel.key} value={channel.value} valueId={channel.id} />
+                        ))}
+                      </IoPanel>
+                    </div>
+                  </div>
+
+                  <div className="hidden grid gap-6" data-io-subtab-panel="configuration">
+                    <div className="grid gap-6 lg:grid-cols-2">
+                      <IoConfigurationSection title="Digital Inputs" translationKey="settings.io.digitalInputs">
+                        {ioConfigurationDigitalInputs.map((channel) => (
+                          <IoConfigurationDigitalRow
+                            checkboxId={channel.checkboxId}
+                            defaultValue={channel.defaultValue}
+                            key={channel.pin}
+                            options={ioConfigurationDigitalInputOptions}
+                            pin={channel.pin}
+                            selectId={channel.selectId}
+                            voltageName={channel.voltageName}
+                          />
+                        ))}
+                      </IoConfigurationSection>
+
+                      <IoConfigurationSection title="Digital Outputs" translationKey="settings.io.digitalOutputs">
+                        {ioConfigurationDigitalOutputs.map((channel) => (
+                          <IoConfigurationDigitalRow
+                            checkboxId={channel.checkboxId}
+                            defaultValue={channel.defaultValue}
+                            key={channel.pin}
+                            options={ioConfigurationDigitalOutputOptions}
+                            pin={channel.pin}
+                            selectId={channel.selectId}
+                            voltageName={channel.voltageName}
+                          />
+                        ))}
+                      </IoConfigurationSection>
+
+                      <IoConfigurationSection title="Analog Inputs" translationKey="settings.io.analogInputs">
+                        {ioConfigurationAnalogInputs.map((channel) => (
+                          <IoConfigurationAnalogRow
+                            checkboxId={channel.checkboxId}
+                            defaultValue={channel.defaultValue}
+                            key={channel.pin}
+                            options={ioConfigurationAnalogInputOptions}
+                            pin={channel.pin}
+                            selectId={channel.selectId}
+                          />
+                        ))}
+                      </IoConfigurationSection>
+
+                      <IoConfigurationSection title="Analog Outputs" translationKey="settings.io.analogOutputs">
+                        {ioConfigurationAnalogOutputs.map((channel) => (
+                          <IoConfigurationAnalogRow
+                            checkboxId={channel.checkboxId}
+                            defaultValue={channel.defaultValue}
+                            key={channel.pin}
+                            options={ioConfigurationAnalogOutputOptions}
+                            pin={channel.pin}
+                            selectId={channel.selectId}
+                          />
+                        ))}
+                      </IoConfigurationSection>
+                    </div>
+
+                    <div className="flex flex-wrap justify-end gap-2 border-t border-border/70 pt-4">
+                      <Button data-i18n="settings.setup.save" id="settings-io-config-save-btn" size="sm" type="button">
+                        Save
+                      </Button>
+                      <Button data-i18n="settings.setup.cancel" id="settings-io-config-cancel-btn" size="sm" type="button" variant="outline">
+                        Cancel
+                      </Button>
+                      <Button data-i18n="settings.setup.restoreDefaults" id="settings-io-config-restore-defaults-btn" size="sm" type="button" variant="outline">
+                        Restore to Defaults
+                      </Button>
+                    </div>
                   </div>
                 </CardContent>
               </Card>

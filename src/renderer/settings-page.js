@@ -7,6 +7,7 @@ import { t } from './preferences.js';
 import { getResolvedTelemetry, showFooterFeedback } from './status-ui.js';
 
 const SETTINGS_TABS = ['system', 'setup', 'io', 'signature', 'alarms', 'docs'];
+const IO_SUBTABS = ['diagnostic', 'configuration'];
 const MAX_SIGNATURE_SAMPLES = 240;
 const WELD_DATA_CAPTURE_MS = 5000;
 const IO_POLL_INTERVAL_MS = 10;
@@ -15,6 +16,7 @@ const DEFAULT_SIGNATURE_DRAW_TO = WELD_DATA_CAPTURE_MS;
 const DEFAULT_HORN_SCAN_DRAW_FROM = 38900;
 const DEFAULT_HORN_SCAN_DRAW_TO = 40900;
 const ROUTING_FIELD_IDS = ['route-amplitude', 'route-seek', 'route-reset'];
+const ANALOG_OUTPUT_ASSIGNMENT_SELECT_IDS = ['settings-io-config-analog-output-24-select', 'settings-io-config-analog-output-25-select'];
 const SETUP_INPUT_FIELDS = {
   weldAmp: {
     inputId: 'amplitude-input',
@@ -161,6 +163,7 @@ const SIGNATURE_MODE_CONFIG = {
 };
 
 let activeSettingsTab = 'system';
+let activeIoSubTab = 'diagnostic';
 let activeSignatureMode = 'weldData';
 let signatureChart = null;
 let signatureSamples = [];
@@ -722,12 +725,14 @@ function refreshIoSummary({ telemetry = runtimeState.lastTelemetry || {}, ioSnap
   });
 }
 
-function isIoConfigurationVisible() {
-  return runtimeState.currentView === 'settings' && activeSettingsTab === 'io';
+function isIoDiagnosticVisible() {
+  return runtimeState.currentView === 'settings'
+    && activeSettingsTab === 'io'
+    && activeIoSubTab === 'diagnostic';
 }
 
 function canPollIoConfiguration() {
-  return isIoConfigurationVisible()
+  return isIoDiagnosticVisible()
     && !runtimeState.hornScanRunning
     && !runtimeState.simulation
     && Boolean(runtimeState.connections?.ethernet)
@@ -818,7 +823,7 @@ async function startIoPolling() {
 
 function syncIoPollingState() {
   if (!canPollIoConfiguration()) {
-    stopIoPolling({ clearSnapshot: !runtimeState.connections?.ethernet || runtimeState.simulation || !isIoConfigurationVisible() });
+    stopIoPolling({ clearSnapshot: !runtimeState.connections?.ethernet || runtimeState.simulation || !isIoDiagnosticVisible() });
     refreshIoSummary();
     return;
   }
@@ -873,6 +878,22 @@ function setActiveSettingsTab(tab) {
   }
 }
 
+function setActiveIoSubTab(tab) {
+  activeIoSubTab = IO_SUBTABS.includes(tab) ? tab : 'diagnostic';
+
+  document.querySelectorAll('[data-io-subtab]').forEach((button) => {
+    const isActive = button.dataset.ioSubtab === activeIoSubTab;
+    button.classList.toggle('active', isActive);
+    button.classList.toggle('text-muted-foreground', !isActive);
+  });
+
+  document.querySelectorAll('[data-io-subtab-panel]').forEach((panel) => {
+    panel.classList.toggle('hidden', panel.dataset.ioSubtabPanel !== activeIoSubTab);
+  });
+
+  syncIoPollingState();
+}
+
 function syncRoutingControlDefaults() {
   const hasEthernetConnection = Boolean(runtimeState.connections?.ethernet) && !runtimeState.simulation;
 
@@ -887,6 +908,24 @@ function syncRoutingControlDefaults() {
   });
 }
 
+function ensureIoOutputAssignment(outputValue) {
+  if (!outputValue) {
+    return;
+  }
+
+  const assignmentSelects = ANALOG_OUTPUT_ASSIGNMENT_SELECT_IDS
+    .map((id) => $(id))
+    .filter(Boolean);
+
+  if (assignmentSelects.some((select) => select.value === outputValue)) {
+    return;
+  }
+
+  if (assignmentSelects[0]) {
+    assignmentSelects[0].value = outputValue;
+  }
+}
+
 function bindSettingsTabs() {
   document.querySelectorAll('[data-settings-tab]').forEach((button) => {
     if (button.dataset.bound === 'true') {
@@ -896,6 +935,19 @@ function bindSettingsTabs() {
     button.dataset.bound = 'true';
     button.addEventListener('click', () => {
       setActiveSettingsTab(button.dataset.settingsTab || 'system');
+    });
+  });
+}
+
+function bindIoSubTabs() {
+  document.querySelectorAll('[data-io-subtab]').forEach((button) => {
+    if (button.dataset.bound === 'true') {
+      return;
+    }
+
+    button.dataset.bound = 'true';
+    button.addEventListener('click', () => {
+      setActiveIoSubTab(button.dataset.ioSubtab || 'diagnostic');
     });
   });
 }
@@ -2346,7 +2398,9 @@ export function initializeSettingsPage() {
   }
 
   bindSettingsTabs();
+  bindIoSubTabs();
   setActiveSettingsTab(activeSettingsTab);
+  setActiveIoSubTab(activeIoSubTab);
   initializeSignatureChart();
   bindSetupControls();
   bindTeensyFlashControls();
@@ -2400,6 +2454,10 @@ export function initializeSettingsPage() {
 
   document.addEventListener('app:teensy-flash-status', (event) => {
     renderTeensyFlashStatus(event.detail || {});
+  });
+
+  document.addEventListener('app:ensure-io-output-assignment', (event) => {
+    ensureIoOutputAssignment(event.detail?.output || '');
   });
 
   document.addEventListener('app:system-info-updated', (event) => {

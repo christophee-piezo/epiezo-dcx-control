@@ -60,11 +60,13 @@ export function TestsView() {
             <div className="grid w-full gap-2 sm:w-auto sm:grid-cols-[minmax(0,140px)_minmax(0,140px)_auto] sm:items-end">
               <FormField label="X-Axis" labelKey="dashboard.graph.xAxis">
                 <NativeSelect defaultValue="time" id="tests-chart-x-axis">
-                  <option data-i18n="chart.axis.time" value="time">Time</option>
-                  <option data-i18n="chart.axis.cycles" value="cycles">Cycles</option>
-                  <option data-i18n="chart.axis.frequency" value="frequency">Frequency</option>
                   <option data-i18n="chart.axis.amplitude" value="amplitude">Amplitude</option>
+                  <option data-i18n="chart.axis.frequency" value="frequency">Frequency</option>
                   <option data-i18n="chart.axis.power" value="power">Power</option>
+                  <option data-i18n="chart.axis.cycles" value="cycles">Cycles</option>
+                  <option data-i18n="chart.axis.time" value="time">Time</option>
+                  <option data-i18n="chart.axis.aux1" value="aux1">Aux 1</option>
+                  <option data-i18n="chart.axis.aux2" value="aux2">Aux 2</option>
                 </NativeSelect>
               </FormField>
               <FormField label="Y-Axis" labelKey="dashboard.graph.yAxis">
@@ -73,6 +75,9 @@ export function TestsView() {
                   <option data-i18n="chart.axis.amplitude" value="amplitude">Amplitude</option>
                   <option data-i18n="chart.axis.power" value="power">Power</option>
                   <option data-i18n="chart.axis.cycles" value="cycles">Cycles</option>
+                  <option data-i18n="chart.axis.time" value="time">Time</option>
+                  <option data-i18n="chart.axis.aux1" value="aux1">Aux 1</option>
+                  <option data-i18n="chart.axis.aux2" value="aux2">Aux 2</option>
                 </NativeSelect>
               </FormField>
               <Button className="w-full sm:w-auto" data-i18n="dashboard.graph.clear" id="clear-tests-chart-btn" size="sm" variant="outline">

@@ -10,7 +10,9 @@ const AXIS_OPTIONS = {
   frequency: { labelKey: 'chart.axis.frequency', unit: 'Hz', color: '#38bdf8' },
   amplitude: { labelKey: 'chart.axis.amplitude', unit: '%', color: '#a78bfa', min: 0, max: 100 },
   power: { labelKey: 'chart.axis.power', unit: '%', color: '#f59e0b', min: 0, max: 100 },
-  cycles: { labelKey: 'chart.axis.cycles', unit: '', color: '#34d399', min: 0 }
+  cycles: { labelKey: 'chart.axis.cycles', unit: '', color: '#34d399', min: 0 },
+  aux1: { labelKey: 'chart.axis.aux1', unit: 'mV', color: '#f472b6' },
+  aux2: { labelKey: 'chart.axis.aux2', unit: 'mV', color: '#22d3ee' }
 };
 
 let telemetryChart = null;
@@ -30,13 +32,49 @@ function getAxisMeta(axisKey) {
   return AXIS_OPTIONS[axisKey] || AXIS_OPTIONS.frequency;
 }
 
+function getTelemetryAxisValue(telemetry = {}, axisKey) {
+  if (axisKey === 'aux1') {
+    const directValue = Number(telemetry?.aux1);
+    if (Number.isFinite(directValue)) {
+      return directValue;
+    }
+
+    const fallbackValue = Number(telemetry?.analogInputsMillivolts?.[2]);
+    return Number.isFinite(fallbackValue) ? fallbackValue : null;
+  }
+
+  if (axisKey === 'aux2') {
+    const directValue = Number(telemetry?.aux2);
+    if (Number.isFinite(directValue)) {
+      return directValue;
+    }
+
+    const fallbackValue = Number(telemetry?.analogInputsMillivolts?.[3]);
+    return Number.isFinite(fallbackValue) ? fallbackValue : null;
+  }
+
+  const value = Number(telemetry?.[axisKey]);
+  return Number.isFinite(value) ? value : null;
+}
+
+function syncGraphAxisAssignmentRequirements() {
+  if (![getAxisSelection('x'), getAxisSelection('y')].includes('power')) {
+    return;
+  }
+
+  document.dispatchEvent(new CustomEvent('app:ensure-io-output-assignment', {
+    detail: {
+      output: 'powerOut'
+    }
+  }));
+}
+
 function getAxisValue(sample, axisKey, firstTimestamp) {
   if (axisKey === 'time') {
     return Number(((sample.timestamp - firstTimestamp) / 1000).toFixed(2));
   }
 
-  const value = Number(sample.telemetry?.[axisKey]);
-  return Number.isFinite(value) ? value : null;
+  return getTelemetryAxisValue(sample.telemetry, axisKey);
 }
 
 function shouldRecordTelemetrySample(telemetry = {}) {
@@ -141,9 +179,8 @@ export function appendTelemetrySample(telemetry = {}) {
     return;
   }
 
-  const hasChartableTelemetry = ['frequency', 'amplitude', 'power', 'cycles'].some((field) => {
-    const value = Number(telemetry[field]);
-    return Number.isFinite(value);
+  const hasChartableTelemetry = ['frequency', 'amplitude', 'power', 'cycles', 'aux1', 'aux2'].some((field) => {
+    return getTelemetryAxisValue(telemetry, field) != null;
   });
 
   if (!hasChartableTelemetry) {
@@ -250,12 +287,16 @@ export function initializeTelemetryChart() {
     }
 
     select.dataset.bound = 'true';
-    select.addEventListener('change', rebuildTelemetryChart);
+    select.addEventListener('change', () => {
+      syncGraphAxisAssignmentRequirements();
+      rebuildTelemetryChart();
+    });
   });
 
   document.addEventListener('app:language-changed', rebuildTelemetryChart);
 
   syncTelemetryPlaybackUiState();
   syncSerialTelemetryGate(!telemetryChartPaused);
+  syncGraphAxisAssignmentRequirements();
   rebuildTelemetryChart();
 }

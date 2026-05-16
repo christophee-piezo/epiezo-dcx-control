@@ -458,6 +458,12 @@
   .grid-cols-3 {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
+  .grid-cols-\[4\.75rem_1\.25rem_minmax\(0\,1fr\)\] {
+    grid-template-columns: 4.75rem 1.25rem minmax(0,1fr);
+  }
+  .grid-cols-\[4\.75rem_1\.25rem_minmax\(0\,1fr\)_auto\] {
+    grid-template-columns: 4.75rem 1.25rem minmax(0,1fr) auto;
+  }
   .grid-cols-\[auto_minmax\(0\,1fr\)\] {
     grid-template-columns: auto minmax(0,1fr);
   }
@@ -750,6 +756,12 @@
       background-color: color-mix(in oklab, hsl(var(--background)) 75%, transparent);
     }
   }
+  .bg-background\/78 {
+    background-color: hsl(var(--background));
+    @supports (color: color-mix(in lab, red, red)) {
+      background-color: color-mix(in oklab, hsl(var(--background)) 78%, transparent);
+    }
+  }
   .bg-background\/80 {
     background-color: hsl(var(--background));
     @supports (color: color-mix(in lab, red, red)) {
@@ -965,6 +977,9 @@
   .text-\[0\.68rem\] {
     font-size: 0.68rem;
   }
+  .text-\[1\.6rem\] {
+    font-size: 1.6rem;
+  }
   .text-\[11px\] {
     font-size: 11px;
   }
@@ -983,6 +998,14 @@
   .font-semibold {
     --tw-font-weight: var(--font-weight-semibold);
     font-weight: var(--font-weight-semibold);
+  }
+  .tracking-\[0\.05em\] {
+    --tw-tracking: 0.05em;
+    letter-spacing: 0.05em;
+  }
+  .tracking-\[0\.08em\] {
+    --tw-tracking: 0.08em;
+    letter-spacing: 0.08em;
   }
   .tracking-\[0\.18em\] {
     --tw-tracking: 0.18em;

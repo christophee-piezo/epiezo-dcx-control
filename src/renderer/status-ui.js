@@ -251,6 +251,38 @@ export function getResolvedTelemetry(telemetry = {}) {
   return nextTelemetry;
 }
 
+function toFiniteNumber(value) {
+  const numericValue = Number(value);
+  return Number.isFinite(numericValue) ? numericValue : null;
+}
+
+function enrichTelemetryChannels(telemetry = {}) {
+  const serialAnalogInputs = [
+    toFiniteNumber(telemetry.analog1),
+    toFiniteNumber(telemetry.analog2),
+    toFiniteNumber(telemetry.analog3),
+    toFiniteNumber(telemetry.analog4)
+  ];
+  const hasSerialAnalogInputs = serialAnalogInputs.some((value) => value != null);
+  const fallbackAnalogInputs = Array.isArray(telemetry.analogInputsMillivolts)
+    ? telemetry.analogInputsMillivolts.map((value) => toFiniteNumber(value)).slice(0, 4)
+    : null;
+  const analogInputsMillivolts = hasSerialAnalogInputs
+    ? serialAnalogInputs
+    : fallbackAnalogInputs;
+
+  if (!analogInputsMillivolts) {
+    return { ...telemetry };
+  }
+
+  return {
+    ...telemetry,
+    analogInputsMillivolts,
+    aux1: analogInputsMillivolts[2],
+    aux2: analogInputsMillivolts[3]
+  };
+}
+
 export function shouldUseSetupRealtimeData(telemetry = runtimeState.lastTelemetry || {}) {
   const resolvedTelemetry = getResolvedTelemetry(telemetry);
 
@@ -301,7 +333,7 @@ export function updateTelemetry(telemetry = {}) {
     ...runtimeState.lastTelemetry,
     ...telemetry
   };
-  const nextTelemetry = getResolvedTelemetry(mergedTelemetry);
+  const nextTelemetry = getResolvedTelemetry(enrichTelemetryChannels(mergedTelemetry));
 
   runtimeState.lastTelemetry = nextTelemetry;
   document.dispatchEvent(new CustomEvent('app:telemetry-updated', { detail: nextTelemetry }));

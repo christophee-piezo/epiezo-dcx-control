@@ -83,11 +83,13 @@ export function DashboardView() {
             <div className="grid w-full gap-2 sm:w-auto sm:grid-cols-[minmax(0,140px)_minmax(0,140px)_auto] sm:items-end">
               <FormField label="X-Axis" labelKey="dashboard.graph.xAxis">
                 <NativeSelect defaultValue="time" id="chart-x-axis">
-                  <option data-i18n="chart.axis.time" value="time">Time</option>
-                  <option data-i18n="chart.axis.cycles" value="cycles">Cycles</option>
-                  <option data-i18n="chart.axis.frequency" value="frequency">Frequency</option>
                   <option data-i18n="chart.axis.amplitude" value="amplitude">Amplitude</option>
+                  <option data-i18n="chart.axis.frequency" value="frequency">Frequency</option>
                   <option data-i18n="chart.axis.power" value="power">Power</option>
+                  <option data-i18n="chart.axis.cycles" value="cycles">Cycles</option>
+                  <option data-i18n="chart.axis.time" value="time">Time</option>
+                  <option data-i18n="chart.axis.aux1" value="aux1">Aux 1</option>
+                  <option data-i18n="chart.axis.aux2" value="aux2">Aux 2</option>
                 </NativeSelect>
               </FormField>
               <FormField label="Y-Axis" labelKey="dashboard.graph.yAxis">
@@ -96,6 +98,9 @@ export function DashboardView() {
                   <option data-i18n="chart.axis.amplitude" value="amplitude">Amplitude</option>
                   <option data-i18n="chart.axis.power" value="power">Power</option>
                   <option data-i18n="chart.axis.cycles" value="cycles">Cycles</option>
+                  <option data-i18n="chart.axis.time" value="time">Time</option>
+                  <option data-i18n="chart.axis.aux1" value="aux1">Aux 1</option>
+                  <option data-i18n="chart.axis.aux2" value="aux2">Aux 2</option>
                 </NativeSelect>
               </FormField>
               <div className="grid grid-cols-3 gap-2 sm:flex sm:w-auto sm:flex-nowrap">

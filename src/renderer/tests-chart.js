@@ -8,7 +8,9 @@ const AXIS_OPTIONS = {
   frequency: { labelKey: 'chart.axis.frequency', unit: 'Hz' },
   amplitude: { labelKey: 'chart.axis.amplitude', unit: '%', min: 0, max: 100 },
   power: { labelKey: 'chart.axis.power', unit: '%', min: 0, max: 100 },
-  cycles: { labelKey: 'chart.axis.cycles', unit: '', min: 0 }
+  cycles: { labelKey: 'chart.axis.cycles', unit: '', min: 0 },
+  aux1: { labelKey: 'chart.axis.aux1', unit: 'mV' },
+  aux2: { labelKey: 'chart.axis.aux2', unit: 'mV' }
 };
 
 let testsChart = null;
@@ -27,17 +29,53 @@ function getAxisMeta(axisKey) {
   return AXIS_OPTIONS[axisKey] || AXIS_OPTIONS.frequency;
 }
 
+function getTelemetryAxisValue(telemetry = {}, axisKey) {
+  if (axisKey === 'aux1') {
+    const directValue = Number(telemetry?.aux1);
+    if (Number.isFinite(directValue)) {
+      return directValue;
+    }
+
+    const fallbackValue = Number(telemetry?.analogInputsMillivolts?.[2]);
+    return Number.isFinite(fallbackValue) ? fallbackValue : null;
+  }
+
+  if (axisKey === 'aux2') {
+    const directValue = Number(telemetry?.aux2);
+    if (Number.isFinite(directValue)) {
+      return directValue;
+    }
+
+    const fallbackValue = Number(telemetry?.analogInputsMillivolts?.[3]);
+    return Number.isFinite(fallbackValue) ? fallbackValue : null;
+  }
+
+  const value = Number(telemetry?.[axisKey]);
+  return Number.isFinite(value) ? value : null;
+}
+
+function syncGraphAxisAssignmentRequirements() {
+  if (![getAxisSelection('x'), getAxisSelection('y')].includes('power')) {
+    return;
+  }
+
+  document.dispatchEvent(new CustomEvent('app:ensure-io-output-assignment', {
+    detail: {
+      output: 'powerOut'
+    }
+  }));
+}
+
 function getAxisValue(sample, axisKey, firstTimestamp) {
   if (axisKey === 'time') {
     return Number((((sample.timestamp || 0) - firstTimestamp) / 1000).toFixed(2));
   }
 
-  const value = Number(sample.telemetry?.[axisKey]);
-  return Number.isFinite(value) ? value : null;
+  return getTelemetryAxisValue(sample.telemetry, axisKey);
 }
 
 function hasChartableTelemetry(telemetry = {}) {
-  return ['frequency', 'amplitude', 'power', 'cycles'].some((field) => Number.isFinite(Number(telemetry[field])));
+  return ['frequency', 'amplitude', 'power', 'cycles', 'aux1', 'aux2'].some((field) => getTelemetryAxisValue(telemetry, field) != null);
 }
 
 function buildChartPoints(samples = []) {
@@ -249,10 +287,14 @@ export function initializeTestsComparisonChart() {
     }
 
     select.dataset.bound = 'true';
-    select.addEventListener('change', rebuildTestsChart);
+    select.addEventListener('change', () => {
+      syncGraphAxisAssignmentRequirements();
+      rebuildTestsChart();
+    });
   });
 
   document.addEventListener('app:language-changed', rebuildTestsChart);
 
+  syncGraphAxisAssignmentRequirements();
   rebuildTestsChart();
 }
