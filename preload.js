@@ -1,11 +1,27 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('api', {
+  auth: {
+    bootstrap: () => ipcRenderer.invoke('auth:bootstrap'),
+    register: (payload) => ipcRenderer.invoke('auth:register', payload),
+    login: (payload) => ipcRenderer.invoke('auth:login', payload),
+    logout: () => ipcRenderer.invoke('auth:logout'),
+    touchSession: () => ipcRenderer.invoke('auth:touchSession'),
+    listUsers: () => ipcRenderer.invoke('auth:listUsers'),
+    createUser: (payload) => ipcRenderer.invoke('auth:createUser', payload),
+    updateUser: (payload) => ipcRenderer.invoke('auth:updateUser', payload),
+    deleteUser: (payload) => ipcRenderer.invoke('auth:deleteUser', payload),
+    resetUserPassword: (payload) => ipcRenderer.invoke('auth:resetUserPassword', payload),
+    changePassword: (payload) => ipcRenderer.invoke('auth:changePassword', payload),
+    updateSettings: (payload) => ipcRenderer.invoke('auth:updateSettings', payload)
+  },
+
   dcx: {
     connect: (config) => ipcRenderer.invoke('dcx:connect', config),
     disconnect: () => ipcRenderer.invoke('dcx:disconnect'),
     control: (payload) => ipcRenderer.invoke('dcx:control', payload),
     getStatus: () => ipcRenderer.invoke('dcx:getStatus'),
+    getStatusInitSnapshot: () => ipcRenderer.invoke('dcx:getStatusInitSnapshot'),
     getSystemInfo: () => ipcRenderer.invoke('dcx:getSystemInfo'),
     getSetup: () => ipcRenderer.invoke('dcx:getSetup'),
     getSetupDefaults: () => ipcRenderer.invoke('dcx:getSetupDefaults'),

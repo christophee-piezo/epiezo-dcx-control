@@ -1,3 +1,4 @@
+import { AuthSettingsPanel } from '../auth-settings-panel.jsx';
 import { Button } from '../../ui/button.jsx';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../../ui/card.jsx';
 import { Input } from '../../ui/input.jsx';
@@ -513,7 +514,7 @@ function SetupNumericField({ defaultValue, id, indicatorId, label, labelKey, ...
   );
 }
 
-export function SettingsView() {
+export function SettingsView(authProps) {
   return (
     <main className="content px-3 py-3 pb-4 lg:px-4 lg:py-4 lg:pb-6" id="settings">
       <div className="grid min-w-0 gap-4">
@@ -555,6 +556,8 @@ export function SettingsView() {
                   </FormField>
                 </CardContent>
               </Card>
+
+              <AuthSettingsPanel {...authProps} />
 
               <Card className="min-w-0">
                 <CardHeader>

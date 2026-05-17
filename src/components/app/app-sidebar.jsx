@@ -7,7 +7,7 @@ import { cn } from '../../lib/utils.js';
 
 const navItems = [
   { id: 'dashboard', label: 'Dashboard', key: 'sidebar.nav.dashboard', icon: LayoutDashboard },
-  { id: 'tests', label: 'Essais', key: 'sidebar.nav.tests', icon: ListChecks },
+  { id: 'tests', label: 'Tests', key: 'sidebar.nav.tests', icon: ListChecks },
   { id: 'method', label: 'Method', key: 'sidebar.nav.method', icon: SlidersHorizontal },
   { id: 'settings', label: 'Settings', key: 'sidebar.nav.settings', icon: Settings2 }
 ];

@@ -2,7 +2,7 @@ export const $ = (id) => document.getElementById(id);
 
 export const VIEW_TITLES = {
   dashboard: 'Dashboard',
-  tests: 'Essais',
+  tests: 'Tests',
   method: 'Method',
   sequencer: 'Sequence',
   workflow: 'Workflow',

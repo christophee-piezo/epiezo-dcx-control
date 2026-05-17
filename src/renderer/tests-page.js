@@ -135,8 +135,8 @@ function setSelectedTestMeta(test) {
   }
 
   if (!test) {
-    title.textContent = t('tests.graph.noneLoaded', 'No essai loaded');
-    meta.textContent = t('tests.graph.noneLoadedDescription', 'Load a saved sequence or workflow essai to compare ideal and actual traces.');
+    title.textContent = t('tests.graph.noneLoaded', 'No test loaded');
+    meta.textContent = t('tests.graph.noneLoadedDescription', 'Load a saved sequence or workflow test to compare ideal and actual traces.');
     return;
   }
 
@@ -376,7 +376,7 @@ function renderTestsList() {
   if (!tests.length) {
     container.innerHTML = `
       <div class="rounded-xl border border-dashed border-border/70 bg-background/40 px-4 py-6 text-center text-sm text-muted-foreground">
-        ${t('tests.list.empty', 'No saved essais found.')}
+        ${t('tests.list.empty', 'No saved tests found.')}
       </div>
     `;
     updateRunButtonState();

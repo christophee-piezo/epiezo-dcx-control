@@ -48,7 +48,7 @@ export async function initializeRenderer() {
     refreshStatusUi();
   });
 
-  runtimeState.statusInitCleanup = window.api.dcx.onStatusInit((data) => {
+  const applyStatusInit = (data) => {
     log({ init_status: data });
     updateStatus(data || { status: 'offline' });
 
@@ -59,11 +59,25 @@ export async function initializeRenderer() {
       hideConnectionFailurePopup();
     }
 
-    if (data?.auto && data.status === 'online') {
+    if (data?.status === 'online') {
       if (data?.telemetry) {
         updateTelemetry(data.telemetry);
       }
-      applySystemInfo(data?.systemInfo || {});
+
+      if (data?.systemInfo) {
+        applySystemInfo(data.systemInfo);
+      }
     }
-  });
+  };
+
+  runtimeState.statusInitCleanup = window.api.dcx.onStatusInit(applyStatusInit);
+
+  try {
+    const snapshot = await window.api?.dcx?.getStatusInitSnapshot?.();
+    if (snapshot) {
+      applyStatusInit(snapshot);
+    }
+  } catch (error) {
+    log({ init_status_snapshot_error: error.message });
+  }
 }
