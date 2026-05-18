@@ -9,8 +9,8 @@ const {
   extractSystemInfoFromRaw,
   parseSetupPayload,
   parseIoPayload,
-  mergeIoSnapshots,
-  getIoDigitalState
+  parseIoConfigurationPayload,
+  mergeIoSnapshots
 } = require('./dcxResponseParsers');
 
 const DCX_MIN_AMPLITUDE = 0;
@@ -43,12 +43,104 @@ const DEFAULT_SETUP_SETTINGS = {
   SetDigTuneWithScan: '0'
 };
 const STATUS_SIGNAL_FIELDS = ['ready', 'active', 'alarm', 'seek'];
-const STATUS_SIGNAL_PINS = {
-  ready: 'PIN14',
-  active: 'PIN15',
-  alarm: 'PIN0',
-  seek: 'PIN1'
+const IO_CONFIGURATION_GROUPS = {
+  digitalInputs: {
+    paramKey: 'DI',
+    pins: [1, 2, 3, 4],
+    assignments: {
+      unassign: '0',
+      externalStart: '1',
+      externalSeek: '3',
+      externalReset: '5',
+      externalTest: '7',
+      memoryClear: '9',
+      extHornScan: '11',
+      displayLock: '21',
+      cableDetect: '36'
+    }
+  },
+  digitalOutputs: {
+    paramKey: 'DO',
+    pins: [7, 8, 9, 10],
+    assignments: {
+      unassign: '0',
+      ready: '1',
+      sonicsActive: '3',
+      generalAlarm: '5',
+      overloadAlarm: '7',
+      seekScanOut: '9'
+    }
+  },
+  analogInputs: {
+    paramKey: 'AI',
+    pins: [17, 18],
+    assignments: {
+      unassign: '0',
+      frequencyOffset: '1',
+      amplitudeIn: '2'
+    }
+  },
+  analogOutputs: {
+    paramKey: 'AO',
+    pins: [24, 25],
+    assignments: {
+      unassign: '0',
+      powerOut: '1',
+      amplitudeOut: '2',
+      frequencyOut: '4'
+    }
+  }
 };
+const IO_CONFIGURATION_ASSIGNMENT_LOOKUPS = Object.fromEntries(
+  Object.entries(IO_CONFIGURATION_GROUPS).map(([groupKey, group]) => [
+    groupKey,
+    Object.entries(group.assignments).reduce((lookup, [assignment, code]) => ({
+      ...lookup,
+      [code]: assignment
+    }), {})
+  ])
+);
+const DEFAULT_IO_CONFIGURATION = {
+  systemType: '1',
+  lowselect: '0',
+  digitalInputs: {
+    PIN1: { pin: 'PIN1', assignment: 'externalReset', assignmentCode: '5', enabled: true, rawEnabled: '1' },
+    PIN2: { pin: 'PIN2', assignment: 'externalSeek', assignmentCode: '3', enabled: true, rawEnabled: '1' },
+    PIN3: { pin: 'PIN3', assignment: 'externalStart', assignmentCode: '1', enabled: true, rawEnabled: '1' },
+    PIN4: { pin: 'PIN4', assignment: 'memoryClear', assignmentCode: '9', enabled: true, rawEnabled: '1' }
+  },
+  digitalOutputs: {
+    PIN7: { pin: 'PIN7', assignment: 'ready', assignmentCode: '1', enabled: true, rawEnabled: '1' },
+    PIN8: { pin: 'PIN8', assignment: 'sonicsActive', assignmentCode: '3', enabled: true, rawEnabled: '1' },
+    PIN9: { pin: 'PIN9', assignment: 'generalAlarm', assignmentCode: '5', enabled: true, rawEnabled: '1' },
+    PIN10: { pin: 'PIN10', assignment: 'seekScanOut', assignmentCode: '9', enabled: true, rawEnabled: '1' }
+  },
+  analogInputs: {
+    PIN17: { pin: 'PIN17', assignment: 'amplitudeIn', assignmentCode: '2', enabled: true, rawEnabled: '1' },
+    PIN18: { pin: 'PIN18', assignment: 'frequencyOffset', assignmentCode: '1', enabled: true, rawEnabled: '1' }
+  },
+  analogOutputs: {
+    PIN24: { pin: 'PIN24', assignment: 'frequencyOut', assignmentCode: '4', enabled: true, rawEnabled: '1' },
+    PIN25: { pin: 'PIN25', assignment: 'amplitudeOut', assignmentCode: '2', enabled: true, rawEnabled: '1' }
+  }
+};
+
+function cloneIoConfiguration(configuration = DEFAULT_IO_CONFIGURATION) {
+  const cloneGroup = (group = {}) => Object.entries(group).reduce((nextGroup, [pin, entry]) => ({
+    ...nextGroup,
+    [pin]: entry ? { ...entry } : entry
+  }), {});
+
+  return {
+    systemType: configuration.systemType ?? DEFAULT_IO_CONFIGURATION.systemType,
+    lowselect: configuration.lowselect ?? DEFAULT_IO_CONFIGURATION.lowselect,
+    raw: configuration.raw || '',
+    digitalInputs: cloneGroup(configuration.digitalInputs),
+    digitalOutputs: cloneGroup(configuration.digitalOutputs),
+    analogInputs: cloneGroup(configuration.analogInputs),
+    analogOutputs: cloneGroup(configuration.analogOutputs)
+  };
+}
 
 function averageFiniteValues(values = []) {
   const finiteValues = values.filter((value) => Number.isFinite(value));
@@ -144,6 +236,7 @@ class DcxService extends EventEmitter {
     this.acquisitionPaused = false;
     this.httpRequestCount = 0;
     this.ioSnapshot = null;
+    this.ioConfiguration = cloneIoConfiguration();
     this.setupMetadata = {};
     this.serialTelemetryEnabled = false;
     this.serialTelemetryForced = false;
@@ -173,8 +266,20 @@ class DcxService extends EventEmitter {
     };
 
     this.serialService.on('data', (data) => {
-      if (!this.simulation && this.serialService.isConnected() && (this.serialTelemetryEnabled || this.serialTelemetryForced)) {
-        this.updateTelemetry(data, { source: 'serial' });
+      if (!this.simulation && this.serialService.isConnected()) {
+        const payload = (this.serialTelemetryEnabled || this.serialTelemetryForced)
+          ? data
+          : STATUS_SIGNAL_FIELDS.reduce((signals, field) => {
+              if (data?.[field] != null) {
+                signals[field] = data[field];
+              }
+
+              return signals;
+            }, {});
+
+        if (Object.keys(payload).length) {
+          this.updateTelemetry(payload, { source: 'serial' });
+        }
       }
     });
 
@@ -186,12 +291,17 @@ class DcxService extends EventEmitter {
           this.updateTelemetry({
             deviceStatus: 'Disconnected',
             ready: 0,
+            alarm: 0,
             active: 0,
             seek: 0
           });
         } else {
           this.updateTelemetry({
-            deviceStatus: 'DCX Ethernet Connected'
+            deviceStatus: 'DCX Ethernet Connected',
+            ready: 0,
+            alarm: 0,
+            active: 0,
+            seek: 0
           });
         }
       }
@@ -218,7 +328,7 @@ class DcxService extends EventEmitter {
   updateTelemetry(data, { source = 'unknown' } = {}) {
     const sanitizedTelemetry = { ...data };
 
-    if (source === 'http' && this.serialService.isConnected()) {
+    if (source === 'http') {
       STATUS_SIGNAL_FIELDS.forEach((field) => {
         delete sanitizedTelemetry[field];
       });
@@ -270,6 +380,10 @@ class DcxService extends EventEmitter {
     return {
       ...this.defaultSettings
     };
+  }
+
+  getIoConfigurationSnapshot() {
+    return cloneIoConfiguration(this.ioConfiguration);
   }
 
   clearSystemInfo() {
@@ -378,9 +492,103 @@ class DcxService extends EventEmitter {
     };
   }
 
+  getConnectionStateSnapshot() {
+    return {
+      status: this.status,
+      mode: this.mode,
+      simulation: this.simulation,
+      connections: this.getTransportConnections()
+    };
+  }
+
   hasActiveOperation() {
     const telemetry = this.getTelemetrySnapshot();
     return Boolean(telemetry.active || telemetry.seek || this.pendingActivityAction || this.hornScanActive);
+  }
+
+  getShutdownActivitySnapshot() {
+    const telemetry = this.getTelemetrySnapshot();
+    const sonicsActive = Boolean(telemetry.active || this.pendingActivityAction === 'start');
+    const seekActive = Boolean(telemetry.seek || this.pendingActivityAction === 'seek');
+    const scanActive = Boolean(this.hornScanActive && this.pendingActivityAction === 'hornScan');
+
+    return {
+      active: Boolean(sonicsActive || seekActive || scanActive),
+      sonicsActive,
+      seekActive,
+      scanActive,
+      pendingActivityAction: this.pendingActivityAction || null
+    };
+  }
+
+  async stopActiveOperationForShutdown() {
+    const activity = this.getShutdownActivitySnapshot();
+    if (!activity.active) {
+      return {
+        success: true,
+        stopped: false,
+        activity
+      };
+    }
+
+    let scanStopped = false;
+    let sonicsStopped = false;
+
+    if (activity.scanActive) {
+      const abortResult = await this.abortHornScan();
+      if (!abortResult?.success) {
+        return {
+          success: false,
+          error: abortResult?.error || abortResult?.message || 'Failed to stop horn scan before shutdown',
+          activity
+        };
+      }
+
+      scanStopped = true;
+
+      const waitStart = Date.now();
+      while (this.hornScanActive) {
+        if (Date.now() - waitStart >= 2000) {
+          return {
+            success: false,
+            error: 'Horn scan did not stop before shutdown',
+            activity
+          };
+        }
+
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+    }
+
+    const shouldStopSonics = Boolean(
+      this.getTelemetrySnapshot().active
+      || this.getTelemetrySnapshot().seek
+      || this.pendingActivityAction === 'start'
+      || this.pendingActivityAction === 'seek'
+      || activity.sonicsActive
+      || activity.seekActive
+    );
+
+    if (shouldStopSonics) {
+      const stopResult = await this.control('stop');
+      if (!stopResult?.success) {
+        return {
+          success: false,
+          error: stopResult?.error || stopResult?.message || 'Failed to stop sonics before shutdown',
+          activity
+        };
+      }
+
+      sonicsStopped = true;
+    }
+
+    return {
+      success: true,
+      stopped: Boolean(scanStopped || sonicsStopped),
+      scanStopped,
+      sonicsStopped,
+      activity
+    };
   }
 
   getActiveOperationError(action = 'switch') {
@@ -449,20 +657,6 @@ class DcxService extends EventEmitter {
   }
 
   resolveStatusSignal(field, fallbackValue = null) {
-    if (!this.ethernetConnected) {
-      if (fallbackValue == null) {
-        return null;
-      }
-
-      return fallbackValue ? 1 : 0;
-    }
-
-    const pin = STATUS_SIGNAL_PINS[field];
-    const ioState = getIoDigitalState(this.ioSnapshot?.entries?.[pin] || null);
-    if (ioState != null) {
-      return ioState ? 1 : 0;
-    }
-
     if (fallbackValue == null) {
       return null;
     }
@@ -595,6 +789,15 @@ class DcxService extends EventEmitter {
     try {
       const serialResult = await this.serialService.connect(nextConfig.port);
       port = serialResult.port;
+
+      // Ask the Teensy to enable and emit ADC debug immediately. If the flashed
+      // firmware does not support this command yet, the serial console will show it.
+      try {
+        this.serialService.sendCommand('ADC_DEBUG ON');
+        this.serialService.sendCommand('ADC_DEBUG');
+      } catch (serialDebugError) {
+        console.error('[SERIAL DEBUG REQUEST ERROR]', serialDebugError.message);
+      }
     } catch (error) {
       warnings.push(error.message);
     }
@@ -646,10 +849,10 @@ class DcxService extends EventEmitter {
     };
   }
 
-  async disconnect() {
+  async disconnect({ skipActiveCheck = false } = {}) {
     this.serialTelemetryForced = false;
 
-    if (this.hasActiveOperation()) {
+    if (!skipActiveCheck && this.hasActiveOperation()) {
       return {
         success: false,
         ...(this.status === 'online' ? this.getOnlineStatus() : this.getOfflineStatus()),
@@ -749,6 +952,117 @@ class DcxService extends EventEmitter {
     }
   }
 
+  async postIoConfigurationUpdate(body) {
+    if (!this.baseUrl || !this.ethernetConnected) {
+      throw new Error('Ethernet transport is not connected');
+    }
+
+    this.httpRequestCount += 1;
+
+    try {
+      return await this.ethernetService.postIoConfigurationUpdate(body);
+    } finally {
+      this.httpRequestCount = Math.max(0, this.httpRequestCount - 1);
+    }
+  }
+
+  normalizeIoConfiguration(config = {}) {
+    const nextConfiguration = cloneIoConfiguration({
+      ...DEFAULT_IO_CONFIGURATION,
+      ...config
+    });
+
+    Object.entries(IO_CONFIGURATION_GROUPS).forEach(([groupKey, group]) => {
+      group.pins.forEach((pinNumber) => {
+        const pin = `PIN${pinNumber}`;
+        const defaultEntry = DEFAULT_IO_CONFIGURATION[groupKey]?.[pin] || {
+          pin,
+          assignment: 'unassign',
+          assignmentCode: '0',
+          enabled: true,
+          rawEnabled: '1'
+        };
+        const sourceEntry = config?.[groupKey]?.[pin] || nextConfiguration[groupKey]?.[pin] || defaultEntry;
+        const assignment = String(sourceEntry.assignment || defaultEntry.assignment || 'unassign').trim();
+        const assignmentCode = group.assignments[assignment] ?? sourceEntry.assignmentCode ?? defaultEntry.assignmentCode ?? '0';
+        const enabled = sourceEntry.enabled == null ? Boolean(defaultEntry.enabled) : Boolean(sourceEntry.enabled);
+
+        nextConfiguration[groupKey][pin] = {
+          ...defaultEntry,
+          ...sourceEntry,
+          pin,
+          assignment,
+          assignmentCode: String(assignmentCode),
+          enabled,
+          rawEnabled: enabled ? '1' : '0'
+        };
+      });
+    });
+
+    nextConfiguration.lowselect = String(config?.lowselect ?? nextConfiguration.lowselect ?? DEFAULT_IO_CONFIGURATION.lowselect);
+    nextConfiguration.systemType = String(config?.systemType ?? nextConfiguration.systemType ?? DEFAULT_IO_CONFIGURATION.systemType);
+
+    return nextConfiguration;
+  }
+
+  buildIoConfigurationSnapshot(parsedConfiguration = {}) {
+    const nextConfiguration = cloneIoConfiguration({
+      ...DEFAULT_IO_CONFIGURATION,
+      systemType: parsedConfiguration.systemType ?? DEFAULT_IO_CONFIGURATION.systemType,
+      raw: parsedConfiguration.raw || ''
+    });
+
+    Object.entries(IO_CONFIGURATION_GROUPS).forEach(([groupKey, group]) => {
+      group.pins.forEach((pinNumber) => {
+        const pin = `PIN${pinNumber}`;
+        const parsedEntry = parsedConfiguration?.[groupKey]?.[pin];
+        if (!parsedEntry) {
+          return;
+        }
+
+        const assignmentCode = String(parsedEntry.assignmentCode ?? nextConfiguration[groupKey][pin]?.assignmentCode ?? '0');
+        const assignment = IO_CONFIGURATION_ASSIGNMENT_LOOKUPS[groupKey]?.[assignmentCode]
+          || nextConfiguration[groupKey][pin]?.assignment
+          || 'unassign';
+        const enabled = parsedEntry.enabled == null
+          ? Boolean(nextConfiguration[groupKey][pin]?.enabled)
+          : Boolean(parsedEntry.enabled);
+
+        nextConfiguration[groupKey][pin] = {
+          ...nextConfiguration[groupKey][pin],
+          ...parsedEntry,
+          pin,
+          assignment,
+          assignmentCode,
+          enabled,
+          rawEnabled: enabled ? '1' : '0'
+        };
+      });
+    });
+
+    return nextConfiguration;
+  }
+
+  buildIoConfigurationUpdateBody(configuration = {}) {
+    const normalizedConfiguration = this.normalizeIoConfiguration(configuration);
+    const groupSegments = Object.entries(IO_CONFIGURATION_GROUPS).map(([groupKey, group]) => {
+      const values = group.pins.flatMap((pinNumber) => {
+        const pin = `PIN${pinNumber}`;
+        const entry = normalizedConfiguration[groupKey]?.[pin];
+        const assignmentCode = group.assignments[String(entry?.assignment || '').trim()]
+          ?? String(entry?.assignmentCode ?? '0');
+        const enabled = entry?.enabled ? '1' : '0';
+
+        return [assignmentCode, enabled];
+      });
+
+      return `${group.paramKey}:${values.join(',')},`;
+    });
+
+    const lowselect = String(normalizedConfiguration.lowselect ?? DEFAULT_IO_CONFIGURATION.lowselect);
+    return `param=${groupSegments.join('&')}&lowselect,${lowselect}&lang=0&userid1=${this.userid}`;
+  }
+
   runSerialCommand(command) {
     if (!this.serialService.isConnected()) {
       throw new Error('Serial transport is not connected');
@@ -757,8 +1071,44 @@ class DcxService extends EventEmitter {
     return this.serialService.sendCommand(command);
   }
 
-  updateTelemetryFromControl(action, value) {
-    const shouldUpdateStatusSignals = this.simulation || !this.ethernetConnected;
+  syncLocalAmplitudeSetting(value) {
+    const weldAmp = this.parseAmplitudeValue(value, 'weldAmp');
+    this.settings = {
+      ...this.settings,
+      weldAmp: String(weldAmp)
+    };
+
+    return weldAmp;
+  }
+
+  resolveControlTransport(action, options = {}) {
+    const preferredTransport = String(options?.transport || '').trim().toLowerCase();
+
+    if (['start', 'stop'].includes(action)) {
+      return 'serial';
+    }
+
+    if (action === 'resetOverload') {
+      return 'ethernet';
+    }
+
+    if (['seek', 'reset', 'setAmp'].includes(action)) {
+      if (['serial', 'teensy'].includes(preferredTransport)) {
+        return 'serial';
+      }
+
+      if (['ethernet', 'http'].includes(preferredTransport)) {
+        return 'ethernet';
+      }
+
+      return 'ethernet';
+    }
+
+    return preferredTransport || 'ethernet';
+  }
+
+  updateTelemetryFromControl(action, value, { transport = 'ethernet' } = {}) {
+    const shouldUpdateStatusSignals = this.simulation || transport === 'serial' || !this.ethernetConnected;
 
     switch (action) {
       case 'start':
@@ -809,14 +1159,21 @@ class DcxService extends EventEmitter {
           deviceStatus: this.simulation ? 'Simulator Ready' : this.telemetry.deviceStatus
         });
         break;
+      case 'setAmp':
+        this.updateTelemetry({
+          amplitude: value?.weldAmp != null ? value.weldAmp : this.telemetry.amplitude,
+          deviceStatus: this.simulation ? 'Simulator Ready' : this.telemetry.deviceStatus
+        });
+        break;
       default:
         break;
     }
   }
 
-  getTransportError(action) {
-    const requiresHttp = ['seek', 'reset', 'resetOverload', 'setAmp'].includes(action);
-    const requiresSerial = ['start', 'stop'].includes(action);
+  getTransportError(action, options = {}) {
+    const transport = this.resolveControlTransport(action, options);
+    const requiresHttp = transport === 'ethernet';
+    const requiresSerial = transport === 'serial';
 
     if (requiresHttp && (!this.baseUrl || !this.ethernetConnected)) {
       return 'Ethernet transport is not connected';
@@ -829,7 +1186,7 @@ class DcxService extends EventEmitter {
     return null;
   }
 
-  async control(action, value) {
+  async control(action, value, options = {}) {
     if (this.hornScanActive) {
       return {
         success: false,
@@ -857,16 +1214,17 @@ class DcxService extends EventEmitter {
             value = { ...value, weldAmp };
           }
 
-          this.updateTelemetryFromControl(action, value);
-          return { success: true, action, value, simulation: true };
-        }
+           this.updateTelemetryFromControl(action, value, { transport: this.resolveControlTransport(action, options) });
+           return { success: true, action, value, simulation: true };
+         }
 
-        const transportError = this.getTransportError(action);
-        if (transportError) {
-          return {
-            success: false,
-            error: transportError
-          };
+         const controlTransport = this.resolveControlTransport(action, options);
+         const transportError = this.getTransportError(action, options);
+         if (transportError) {
+           return {
+             success: false,
+             error: transportError
+           };
         }
 
         switch (action) {
@@ -880,33 +1238,20 @@ class DcxService extends EventEmitter {
 
             {
               const previousSerialTelemetryForced = this.serialTelemetryForced;
-            this.serialTelemetryForced = true;
+              this.serialTelemetryForced = true;
 
-            if (typeof value === 'number' && !Number.isNaN(value)) {
-              value = this.parseAmplitudeValue(value, 'Start amplitude');
-
-              if (this.ethernetConnected) {
-                const amplitudeUpdate = await this.setParameters({ weldAmp: value });
-                if (!amplitudeUpdate?.success) {
-                  this.serialTelemetryForced = previousSerialTelemetryForced;
-                  return amplitudeUpdate;
-                }
+              if (typeof value === 'number' && !Number.isNaN(value)) {
+                value = this.syncLocalAmplitudeSetting(value);
               }
-            }
 
-            try {
-              result = this.runSerialCommand('START');
-            } catch (error) {
-              this.serialTelemetryForced = previousSerialTelemetryForced;
-              throw error;
-            }
-
-            if (typeof value === 'number' && !this.ethernetConnected) {
-              result = {
-                ...result,
-                warning: 'Amplitude update skipped because Ethernet transport is not connected'
-              };
-            }
+              try {
+                result = this.runSerialCommand(
+                  typeof value === 'number' ? `START ${value}` : 'START'
+                );
+              } catch (error) {
+                this.serialTelemetryForced = previousSerialTelemetryForced;
+                throw error;
+              }
             }
             break;
           case 'stop':
@@ -916,22 +1261,34 @@ class DcxService extends EventEmitter {
             }
             break;
           case 'seek':
-            result = await this._post(13, 9);
+            result = controlTransport === 'serial'
+              ? this.runSerialCommand('SEEK')
+              : await this._post(13, 9);
             break;
           case 'reset':
-            result = await this._post(4, 1);
+            result = controlTransport === 'serial'
+              ? this.runSerialCommand('RESET')
+              : await this._post(4, 1);
             break;
           case 'resetOverload':
             result = await this._post(16, 0);
             break;
-          case 'setAmp':
-            result = await this.setParameters(value);
+          case 'setAmp': {
+            const weldAmp = this.syncLocalAmplitudeSetting(value?.weldAmp);
+            value = {
+              ...(value && typeof value === 'object' ? value : {}),
+              weldAmp
+            };
+            result = controlTransport === 'serial'
+              ? this.runSerialCommand(`SET_AMP ${weldAmp}`)
+              : await this.setParameters(value);
             break;
+          }
           default:
             return { success: false, error: `Unknown action: ${action}` };
         }
 
-        this.updateTelemetryFromControl(action, value);
+        this.updateTelemetryFromControl(action, value, { transport: controlTransport });
         return result;
       } catch (error) {
         return {
@@ -1199,6 +1556,111 @@ class DcxService extends EventEmitter {
 
   async getIoSnapshot() {
     return this.getIoLiveSnapshot();
+  }
+
+  async getIoConfiguration() {
+    if (this.isAcquisitionPaused()) {
+      return {
+        success: true,
+        hornScanActive: true,
+        acquisitionPaused: true,
+        cached: true,
+        fetchedAt: Date.now(),
+        config: this.getIoConfigurationSnapshot()
+      };
+    }
+
+    if (this.simulation) {
+      return {
+        success: true,
+        simulation: true,
+        fetchedAt: Date.now(),
+        config: this.getIoConfigurationSnapshot()
+      };
+    }
+
+    if (!this.baseUrl || !this.ethernetConnected) {
+      return {
+        success: false,
+        error: 'Ethernet transport is not connected',
+        config: this.getIoConfigurationSnapshot()
+      };
+    }
+
+    const response = await this._post(3, 0);
+    this.ioConfiguration = this.buildIoConfigurationSnapshot(parseIoConfigurationPayload(response.data));
+
+    return {
+      success: true,
+      fetchedAt: Date.now(),
+      raw: response.data,
+      config: this.getIoConfigurationSnapshot()
+    };
+  }
+
+  async setIoConfiguration(configuration = {}) {
+    if (this.hornScanActive) {
+      return {
+        success: false,
+        error: 'A graph capture is currently running',
+        config: this.getIoConfigurationSnapshot()
+      };
+    }
+
+    const normalizedConfiguration = this.normalizeIoConfiguration(configuration);
+
+    if (this.simulation) {
+      this.ioConfiguration = normalizedConfiguration;
+      return {
+        success: true,
+        simulation: true,
+        config: this.getIoConfigurationSnapshot()
+      };
+    }
+
+    const body = this.buildIoConfigurationUpdateBody(normalizedConfiguration);
+    const response = await this.postIoConfigurationUpdate(body);
+    if (response.status !== 200) {
+      throw new Error(`DCX I/O configuration update failed with status ${response.status}`);
+    }
+
+    const refreshedConfiguration = await this.getIoConfiguration();
+    return {
+      success: true,
+      status: response.status,
+      config: refreshedConfiguration.config || this.getIoConfigurationSnapshot()
+    };
+  }
+
+  async restoreIoConfigurationDefaults() {
+    if (this.hornScanActive) {
+      return {
+        success: false,
+        error: 'A graph capture is currently running',
+        config: this.getIoConfigurationSnapshot()
+      };
+    }
+
+    if (this.simulation) {
+      this.ioConfiguration = cloneIoConfiguration(DEFAULT_IO_CONFIGURATION);
+      return {
+        success: true,
+        simulation: true,
+        config: this.getIoConfigurationSnapshot()
+      };
+    }
+
+    const response = await this._post(3, 1);
+    if (response.status !== 200) {
+      throw new Error(`DCX I/O configuration restore failed with status ${response.status}`);
+    }
+
+    const refreshedConfiguration = await this.getIoConfiguration();
+    return {
+      success: true,
+      status: response.status,
+      config: refreshedConfiguration.config || this.getIoConfigurationSnapshot()
+    };
   }
 
   async getHornScanStatus() {

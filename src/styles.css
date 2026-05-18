@@ -111,6 +111,16 @@
     @apply flex;
   }
 
+  .main-wrapper > * {
+    min-width: 0;
+  }
+
+  .content > *,
+  .content .grid > *,
+  .content .flex > * {
+    min-width: 0;
+  }
+
   .app-background {
     background-image: radial-gradient(circle at top, rgba(59, 130, 246, 0.14), transparent 30%), linear-gradient(180deg, rgba(15, 23, 42, 0.45), transparent 32%);
   }
@@ -258,7 +268,7 @@
   }
 
   #tests-telemetry-chart-container {
-    @apply relative mt-2 min-h-[22rem] flex-1 overflow-hidden rounded-xl border border-border/60 bg-background/80 p-3;
+    @apply relative mt-2 min-h-[16rem] flex-1 overflow-hidden rounded-xl border border-border/60 bg-background/80 p-3 sm:min-h-[18rem] lg:min-h-[22rem];
   }
 
   .workflow-editor-shell {
@@ -590,7 +600,7 @@
   }
 
   .tests-list-item {
-    @apply shrink-0 rounded-xl border border-border/70 bg-background/88 p-3 shadow-sm transition-colors;
+    @apply min-w-0 shrink-0 rounded-xl border border-border/70 bg-background/88 p-3 shadow-sm transition-colors;
   }
 
   .tests-list-item.active {

@@ -27,7 +27,7 @@ export function SequencerView() {
           <CardContent className="min-w-0 p-3 pt-3 lg:p-4 lg:pt-4">
             <div className="grid min-w-0 gap-3">
               <div className="min-w-0 rounded-2xl border border-border/70 bg-background/55 p-3">
-                <div className="grid gap-3 xl:grid-cols-[minmax(0,1.2fr)_minmax(0,0.55fr)_minmax(0,0.7fr)_minmax(0,0.85fr)_auto] xl:items-end">
+                <div className="grid gap-3 2xl:grid-cols-[minmax(0,1.2fr)_minmax(0,0.55fr)_minmax(0,0.7fr)_minmax(0,0.85fr)_auto] 2xl:items-end">
                   <FormField label="Sequence Name" labelKey="sequencer.sequenceName">
                     <Input id="seq-name" placeholder="Routine Name..." type="text" />
                   </FormField>

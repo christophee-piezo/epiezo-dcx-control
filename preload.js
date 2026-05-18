@@ -22,6 +22,7 @@ contextBridge.exposeInMainWorld('api', {
     control: (payload) => ipcRenderer.invoke('dcx:control', payload),
     getStatus: () => ipcRenderer.invoke('dcx:getStatus'),
     getStatusInitSnapshot: () => ipcRenderer.invoke('dcx:getStatusInitSnapshot'),
+    getStatusMonitorSnapshot: () => ipcRenderer.invoke('dcx:getStatusMonitorSnapshot'),
     getSystemInfo: () => ipcRenderer.invoke('dcx:getSystemInfo'),
     getSetup: () => ipcRenderer.invoke('dcx:getSetup'),
     getSetupDefaults: () => ipcRenderer.invoke('dcx:getSetupDefaults'),
@@ -33,6 +34,9 @@ contextBridge.exposeInMainWorld('api', {
     getIoSnapshot: () => ipcRenderer.invoke('dcx:getIoSnapshot'),
     getIoBootstrapSnapshot: () => ipcRenderer.invoke('dcx:getIoBootstrapSnapshot'),
     getIoLiveSnapshot: () => ipcRenderer.invoke('dcx:getIoLiveSnapshot'),
+    getIoConfiguration: () => ipcRenderer.invoke('dcx:getIoConfiguration'),
+    setIoConfiguration: (payload) => ipcRenderer.invoke('dcx:setIoConfiguration', payload),
+    restoreIoConfigurationDefaults: () => ipcRenderer.invoke('dcx:restoreIoConfigurationDefaults'),
     listSerialPorts: () => ipcRenderer.invoke('dcx:listSerialPorts'),
     runSequence: (t) => ipcRenderer.invoke('dcx:runSequence', t),
     stopSequence: () => ipcRenderer.invoke('dcx:stopSequence'),
@@ -65,6 +69,14 @@ contextBridge.exposeInMainWorld('api', {
         ipcRenderer.removeListener('dcx:telemetry', listener);
       };
     },
+    onStatusMonitor: (cb) => {
+      const listener = (_, data) => cb(data);
+      ipcRenderer.on('dcx:status-monitor', listener);
+
+      return () => {
+        ipcRenderer.removeListener('dcx:status-monitor', listener);
+      };
+    },
     onHornScanProgress: (cb) => {
       const listener = (_, data) => cb(data);
       ipcRenderer.on('dcx:horn-scan-progress', listener);
@@ -86,6 +98,11 @@ contextBridge.exposeInMainWorld('api', {
   workflow: {
     loadScript: () => ipcRenderer.invoke('workflow:loadScript'),
     saveScript: (payload) => ipcRenderer.invoke('workflow:saveScript', payload)
+  },
+
+  dataExport: {
+    saveFile: (payload) => ipcRenderer.invoke('data-export:save-file', payload),
+    autoSaveFile: (payload) => ipcRenderer.invoke('data-export:auto-save-file', payload)
   },
 
   teensy: {

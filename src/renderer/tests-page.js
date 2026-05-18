@@ -1,22 +1,48 @@
 import { t } from './preferences.js';
 import { $, runtimeState } from './runtime.js';
-import { runSequenceFromUi, runWorkflowFromUi } from './controls.js';
+import { hasTeensyControlSource, runSequenceFromUi, runWorkflowFromUi } from './controls.js';
+import { log } from './logger.js';
 import { getSavedSequences, loadSequenceById } from './sequence-library.js';
-import { getResolvedTelemetry } from './status-ui.js';
+import { getResolvedTelemetry, showFooterFeedback } from './status-ui.js';
 import { getSavedWorkflows, loadWorkflowById } from './workflow-library.js';
+import { buildStructuredCsvExport, buildStructuredJsonExport, formatExportTimestamp, sanitizeFileNameSegment } from './data-export.js';
 import {
   appendActualTestSample,
   beginActualTestCapture,
   clearActualTestSamples,
   clearTestsComparisonChart,
+  getTestsComparisonSnapshot,
   endActualTestCapture,
   initializeTestsComparisonChart,
+  restoreTestsComparisonSnapshot,
   setIdealTestSamples
 } from './tests-chart.js';
 
 const IDEAL_SAMPLE_STEP_MS = 250;
+const TESTS_AUTO_SAVE_STORE_KEY = 'tests-auto-save-data';
+const TESTS_COMPARISON_STORE_KEY = 'tests-comparison-state';
+const TESTS_COMPARISON_PERSIST_DELAY_MS = 200;
+const TEST_EXPORT_COLUMNS = [
+  'plotIndex',
+  'sampleIndex',
+  'sampleTimestampMs',
+  'relativeTimeSeconds',
+  'frequency',
+  'amplitude',
+  'power',
+  'cycles',
+  'aux1',
+  'aux2',
+  'alarm',
+  'ready',
+  'active',
+  'seek'
+];
 
 let selectedTestKey = null;
+let autoSaveTestKeys = new Set();
+let testsComparisonPersistTimer = null;
+let testsComparisonStorageBound = false;
 
 function escapeHtml(value) {
   return String(value)
@@ -50,6 +76,290 @@ function formatDate(value) {
   return new Date(value).toLocaleDateString();
 }
 
+function getTestsAxisSelections() {
+  const yAxisValues = String($('tests-chart-y-axis')?.dataset?.selectedValues || $('tests-chart-y-axis')?.value || 'frequency')
+    .split(',')
+    .map((value) => value.trim())
+    .filter(Boolean);
+
+  return {
+    xAxis: $('tests-chart-x-axis')?.value || 'time',
+    yAxis: yAxisValues.join(', ') || 'frequency',
+    yAxes: yAxisValues.length ? yAxisValues : ['frequency']
+  };
+}
+
+function getTelemetryExportValue(telemetry = {}, field) {
+  if (field === 'aux1') {
+    return telemetry?.aux1 ?? telemetry?.analogInputsMillivolts?.[2] ?? '';
+  }
+
+  if (field === 'aux2') {
+    return telemetry?.aux2 ?? telemetry?.analogInputsMillivolts?.[3] ?? '';
+  }
+
+  return telemetry?.[field] ?? '';
+}
+
+function getComparisonSeriesRows(samples = [], plotIndex = 0) {
+  const firstTimestamp = Number(samples[0]?.timestamp) || 0;
+
+  return samples.map((sample, index) => ({
+    plotIndex,
+    sampleIndex: index,
+    sampleTimestampMs: sample.timestamp ?? '',
+    relativeTimeSeconds: Number.isFinite(Number(sample.timestamp))
+      ? Number((((Number(sample.timestamp) - firstTimestamp) / 1000)).toFixed(3))
+      : '',
+    frequency: getTelemetryExportValue(sample.telemetry, 'frequency'),
+    amplitude: getTelemetryExportValue(sample.telemetry, 'amplitude'),
+    power: getTelemetryExportValue(sample.telemetry, 'power'),
+    cycles: getTelemetryExportValue(sample.telemetry, 'cycles'),
+    aux1: getTelemetryExportValue(sample.telemetry, 'aux1'),
+    aux2: getTelemetryExportValue(sample.telemetry, 'aux2'),
+    alarm: getTelemetryExportValue(sample.telemetry, 'alarm'),
+    ready: getTelemetryExportValue(sample.telemetry, 'ready'),
+    active: getTelemetryExportValue(sample.telemetry, 'active'),
+    seek: getTelemetryExportValue(sample.telemetry, 'seek')
+  }));
+}
+
+function getComparisonExportPayload() {
+  const snapshot = getTestsComparisonSnapshot();
+  const selectedTest = getSelectedTest();
+  const axes = getTestsAxisSelections();
+  const rows = [
+    ...getComparisonSeriesRows(snapshot.idealSamples, 0),
+    ...getComparisonSeriesRows(snapshot.actualSamples, 1)
+  ];
+
+  return {
+    metadata: {
+      exportType: 'Test Comparison',
+      exportedAt: new Date().toISOString(),
+      testName: selectedTest?.name || '',
+      testType: selectedTest?.type || '',
+      updatedAt: selectedTest?.updatedAt ? new Date(selectedTest.updatedAt).toISOString() : '',
+      summary: selectedTest?.summary || '',
+      selectedXAxis: axes.xAxis,
+      selectedYAxis: axes.yAxis,
+      idealLabel: snapshot.idealLabel,
+      actualLabel: snapshot.actualLabel,
+      plotMapping: `0=${snapshot.idealLabel}; 1=${snapshot.actualLabel}`,
+      idealSamples: snapshot.idealSamples.length,
+      actualSamples: snapshot.actualSamples.length
+    },
+    snapshot,
+    selectedTest,
+    axes,
+    rows
+  };
+}
+
+function buildComparisonCsvExport(payload) {
+  return buildStructuredCsvExport({
+    infoTitle: 'Test Information',
+    infoRows: [
+      ['Export Type', payload.metadata.exportType],
+      ['Exported At', payload.metadata.exportedAt],
+      ['Test Name', payload.metadata.testName],
+      ['Test Type', payload.metadata.testType],
+      ['Updated At', payload.metadata.updatedAt],
+      ['Summary', payload.metadata.summary],
+      ['Selected X Axis', payload.metadata.selectedXAxis],
+      ['Selected Y Axis', payload.metadata.selectedYAxis],
+      ['Plot Mapping', payload.metadata.plotMapping],
+      ['Ideal Label', payload.metadata.idealLabel],
+      ['Actual Label', payload.metadata.actualLabel],
+      ['Ideal Samples', payload.metadata.idealSamples],
+      ['Actual Samples', payload.metadata.actualSamples]
+    ],
+    dataTitle: 'Test Data',
+    dataColumns: TEST_EXPORT_COLUMNS,
+    dataRows: payload.rows
+  });
+}
+
+function buildComparisonJsonExport(payload) {
+  return buildStructuredJsonExport({
+    metadata: {
+      ...payload.metadata,
+      test: payload.selectedTest
+        ? {
+            id: payload.selectedTest.id,
+            type: payload.selectedTest.type,
+            name: payload.selectedTest.name,
+            updatedAt: payload.selectedTest.updatedAt,
+            summary: payload.selectedTest.summary
+          }
+        : null,
+      axes: payload.axes,
+      raw: payload.snapshot
+    },
+    dataColumns: TEST_EXPORT_COLUMNS,
+    dataRows: payload.rows
+  });
+}
+
+function updateTestsExportButtonState() {
+  const exportButton = $('export-tests-data-btn');
+  if (!exportButton) {
+    return;
+  }
+
+  const snapshot = getTestsComparisonSnapshot();
+  exportButton.disabled = !snapshot.idealSamples.length && !snapshot.actualSamples.length;
+}
+
+async function exportTestsComparisonData() {
+  const payload = getComparisonExportPayload();
+  const { rows } = payload;
+  if (!rows.length) {
+    const message = t('tests.export.noData', 'No test comparison data available to export.');
+    log({ tests_export: message });
+    showFooterFeedback(message, { tone: 'warning', timeout: 5000 });
+    return;
+  }
+
+  if (typeof window.api?.dataExport?.saveFile !== 'function') {
+    const message = t('tests.export.error', 'Test data export failed: {error}').replace('{error}', 'Export is unavailable');
+    log({ tests_export_error: 'Export is unavailable.' });
+    showFooterFeedback(message, { tone: 'error', timeout: 8000 });
+    return;
+  }
+
+  const safeName = sanitizeFileNameSegment(payload.selectedTest?.name || `${payload.snapshot.actualLabel || payload.snapshot.idealLabel || 'test-comparison'}-data`, 'test-comparison');
+  const suggestedName = `${safeName}-${formatExportTimestamp()}.csv`;
+
+  try {
+    const result = await window.api.dataExport.saveFile({
+      title: 'Export Test Comparison Data',
+      suggestedName,
+      preferredExtension: '.csv',
+      csvContent: buildComparisonCsvExport(payload),
+      jsonContent: buildComparisonJsonExport(payload)
+    });
+
+    if (!result?.success) {
+      return;
+    }
+
+    log({ tests_export: { fileName: result.fileName, format: result.format, rows: rows.length } });
+    showFooterFeedback(
+      t('tests.export.success', 'Test comparison exported: {name}').replace('{name}', result.fileName || suggestedName),
+      { tone: 'success', timeout: 5000 }
+    );
+  } catch (error) {
+    log({ tests_export_error: error.message });
+    showFooterFeedback(
+      t('tests.export.error', 'Test data export failed: {error}').replace('{error}', error.message || 'Unknown error'),
+      { tone: 'error', timeout: 8000 }
+    );
+  }
+}
+
+async function autoSaveTestsComparisonData(test) {
+  const payload = getComparisonExportPayload();
+  if (!payload.rows.length || !test || typeof window.api?.dataExport?.autoSaveFile !== 'function') {
+    return;
+  }
+
+  const fileName = `${sanitizeFileNameSegment(`${test.type}-${test.name}`, 'test-data')}-${formatExportTimestamp()}.csv`;
+
+  try {
+    const result = await window.api.dataExport.autoSaveFile({
+      folderName: 'Test Data',
+      fileName,
+      preferredExtension: '.csv',
+      csvContent: buildComparisonCsvExport(payload),
+      jsonContent: buildComparisonJsonExport(payload)
+    });
+
+    if (!result?.success) {
+      return;
+    }
+
+    log({ tests_auto_save: { fileName: result.fileName, rows: payload.rows.length } });
+    showFooterFeedback(
+      t('tests.autoSave.success', 'Test data stored automatically: {name}').replace('{name}', result.fileName || fileName),
+      { tone: 'success', timeout: 5000 }
+    );
+  } catch (error) {
+    log({ tests_auto_save_error: error.message });
+    showFooterFeedback(
+      t('tests.autoSave.error', 'Automatic test data save failed: {error}').replace('{error}', error.message || 'Unknown error'),
+      { tone: 'error', timeout: 8000 }
+    );
+  }
+}
+
+function normalizeStoredTestsComparisonState(value) {
+  if (!value || typeof value !== 'object') {
+    return {
+      selectedTestKey: null,
+      chartState: null
+    };
+  }
+
+  return {
+    selectedTestKey: typeof value.selectedTestKey === 'string' && value.selectedTestKey.trim()
+      ? value.selectedTestKey.trim()
+      : null,
+    chartState: value.chartState && typeof value.chartState === 'object'
+      ? value.chartState
+      : null
+  };
+}
+
+function scheduleTestsComparisonPersistence() {
+  if (testsComparisonPersistTimer) {
+    window.clearTimeout(testsComparisonPersistTimer);
+  }
+
+  testsComparisonPersistTimer = window.setTimeout(() => {
+    testsComparisonPersistTimer = null;
+    const persistResult = window.api?.store?.set?.(TESTS_COMPARISON_STORE_KEY, {
+      selectedTestKey,
+      chartState: getTestsComparisonSnapshot()
+    });
+    if (persistResult && typeof persistResult.catch === 'function') {
+      persistResult.catch(() => {});
+    }
+  }, TESTS_COMPARISON_PERSIST_DELAY_MS);
+}
+
+async function loadStoredTestsComparisonState() {
+  try {
+    const stored = normalizeStoredTestsComparisonState(await window.api.store.get(TESTS_COMPARISON_STORE_KEY));
+    selectedTestKey = stored.selectedTestKey;
+
+    if (stored.chartState) {
+      restoreTestsComparisonSnapshot(stored.chartState);
+    }
+
+    setSelectedTestMeta(getSelectedTest());
+    renderTestsList();
+  } catch {
+    selectedTestKey = null;
+    clearTestsComparisonChart();
+    setSelectedTestMeta(null);
+    renderTestsList();
+  }
+}
+
+async function loadStoredAutoSavePreferences() {
+  try {
+    const stored = await window.api.store.get(TESTS_AUTO_SAVE_STORE_KEY);
+    autoSaveTestKeys = new Set(Array.isArray(stored) ? stored.filter((value) => typeof value === 'string' && value) : []);
+  } catch {
+    autoSaveTestKeys = new Set();
+  }
+}
+
+async function persistAutoSavePreferences() {
+  await window.api.store.set(TESTS_AUTO_SAVE_STORE_KEY, [...autoSaveTestKeys]);
+}
+
 function getSelectedTest() {
   return getAllTests().find((test) => buildTestKey(test.type, test.id) === selectedTestKey) || null;
 }
@@ -81,6 +391,10 @@ function getAllTests() {
   });
 
   return [...sequences, ...workflows];
+}
+
+function isAutoSaveEnabledForTest(test) {
+  return Boolean(test && autoSaveTestKeys.has(buildTestKey(test.type, test.id)));
 }
 
 function getFilterType() {
@@ -354,7 +668,7 @@ function updateRunButtonState() {
     return;
   }
 
-  runButton.disabled = !getSelectedTest() || isExecutionActive();
+  runButton.disabled = !getSelectedTest() || isExecutionActive() || !hasTeensyControlSource();
 }
 
 function renderTestsList() {
@@ -365,6 +679,7 @@ function renderTestsList() {
 
   const tests = getFilteredTests();
   const executionActive = isExecutionActive();
+  const hasTeensyExecutionSource = hasTeensyControlSource();
   const selectedTest = getSelectedTest();
 
   if (selectedTest && !getAllTests().some((test) => buildTestKey(test.type, test.id) === selectedTestKey)) {
@@ -380,11 +695,13 @@ function renderTestsList() {
       </div>
     `;
     updateRunButtonState();
+    updateTestsExportButtonState();
     return;
   }
 
   container.innerHTML = tests.map((test) => {
     const isSelected = buildTestKey(test.type, test.id) === selectedTestKey;
+    const autoSaveEnabled = isAutoSaveEnabledForTest(test);
     const typeCardClassName = test.type === 'sequence' ? 'typed-item-card typed-item-card-sequence' : 'typed-item-card typed-item-card-workflow';
     const typePillClassName = test.type === 'sequence' ? 'tests-type-pill typed-item-badge typed-item-badge-sequence' : 'tests-type-pill typed-item-badge typed-item-badge-workflow';
     const typeShortLabel = test.type === 'sequence' ? 'SEQ' : 'WF';
@@ -418,18 +735,30 @@ function renderTestsList() {
             data-test-action="run"
             data-test-id="${escapeHtml(test.id)}"
             data-test-type="${escapeHtml(test.type)}"
-            ${executionActive ? 'disabled' : ''}
+            ${executionActive || !hasTeensyExecutionSource ? 'disabled' : ''}
             type="button"
           >
             ${escapeHtml(t('tests.actions.run', 'Run'))}
           </button>
         </div>
+        <label class="mt-3 flex items-center gap-2 text-xs font-medium text-muted-foreground">
+          <input
+            class="size-4 accent-primary"
+            data-test-auto-save="true"
+            data-test-id="${escapeHtml(test.id)}"
+            data-test-type="${escapeHtml(test.type)}"
+            type="checkbox"
+            ${autoSaveEnabled ? 'checked' : ''}
+          />
+          ${escapeHtml(t('tests.actions.storeData', 'Store Data'))}
+        </label>
       </div>
     `;
   }).join('');
 
   setSelectedTestMeta(selectedTest);
   updateRunButtonState();
+  updateTestsExportButtonState();
 }
 
 async function loadTestIntoComparison(test) {
@@ -468,6 +797,9 @@ async function runLoadedTest() {
   } finally {
     endActualTestCapture();
     renderTestsList();
+    if (isAutoSaveEnabledForTest(test)) {
+      await autoSaveTestsComparisonData(test);
+    }
   }
 }
 
@@ -508,6 +840,22 @@ function bindTestsListActions() {
   }
 
   list.dataset.bound = 'true';
+  list.addEventListener('change', async (event) => {
+    const checkbox = event.target.closest('[data-test-auto-save]');
+    if (!checkbox) {
+      return;
+    }
+
+    const testKey = buildTestKey(checkbox.dataset.testType, checkbox.dataset.testId);
+    if (checkbox.checked) {
+      autoSaveTestKeys.add(testKey);
+    } else {
+      autoSaveTestKeys.delete(testKey);
+    }
+
+    await persistAutoSavePreferences();
+  });
+
   list.addEventListener('click', async (event) => {
     const button = event.target.closest('[data-test-action]');
     if (!button) {
@@ -539,17 +887,41 @@ function bindRunSelectedAction() {
   button.addEventListener('click', runLoadedTest);
 }
 
+function bindExportAction() {
+  const button = $('export-tests-data-btn');
+  if (!button || button.dataset.bound === 'true') {
+    return;
+  }
+
+  button.dataset.bound = 'true';
+  button.addEventListener('click', exportTestsComparisonData);
+}
+
 export function initializeTestsPage() {
   initializeTestsComparisonChart();
   bindFilterButtons();
   bindFilterInputs();
   bindTestsListActions();
   bindRunSelectedAction();
+  bindExportAction();
   setSelectedTestMeta(null);
   renderTestsList();
+  void loadStoredAutoSavePreferences().then(() => {
+    renderTestsList();
+  });
+  void loadStoredTestsComparisonState();
+
+  if (!testsComparisonStorageBound) {
+    testsComparisonStorageBound = true;
+    document.addEventListener('app:tests-comparison-changed', () => {
+      scheduleTestsComparisonPersistence();
+      updateTestsExportButtonState();
+    });
+  }
 
   document.addEventListener('app:tests-library-changed', renderTestsList);
   document.addEventListener('app:language-changed', renderTestsList);
+  document.addEventListener('app:status-updated', renderTestsList);
   document.addEventListener('app:sequence-status', renderTestsList);
   document.addEventListener('app:workflow-status', renderTestsList);
   document.addEventListener('app:telemetry-updated', (event) => {

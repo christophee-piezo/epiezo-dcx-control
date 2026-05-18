@@ -3,6 +3,8 @@ import { log } from './logger.js';
 import { t } from './preferences.js';
 
 const STORE_KEY = 'saved-workflows';
+const DRAFT_STORE_KEY = 'workflow-editor-draft';
+const DRAFT_PERSIST_DELAY_MS = 200;
 const LINE_HEIGHT_PX = 24;
 const EDITOR_PADDING_TOP_PX = 8;
 
@@ -28,6 +30,7 @@ let savedWorkflows = [];
 let activeWorkflowId = null;
 let libraryStateKey = 'workflow.library.ready';
 let languageListenerBound = false;
+let workflowDraftPersistTimer = null;
 
 function navigateToMethodView() {
   document.dispatchEvent(new CustomEvent('app:navigate', { detail: { tab: 'workflow' } }));
@@ -65,8 +68,58 @@ function normalizeSavedWorkflows(value) {
     .sort((a, b) => b.updatedAt - a.updatedAt);
 }
 
+function normalizeWorkflowDraft(value) {
+  if (!value || typeof value !== 'object') {
+    return null;
+  }
+
+  return {
+    workflowId: typeof value.workflowId === 'string' && value.workflowId.trim()
+      ? value.workflowId.trim()
+      : null,
+    name: typeof value.name === 'string' ? value.name : '',
+    script: typeof value.script === 'string' ? value.script : '',
+    workflowFileName: typeof value.workflowFileName === 'string' ? value.workflowFileName : ''
+  };
+}
+
 async function persistSavedWorkflows() {
   await window.api.store.set(STORE_KEY, savedWorkflows);
+}
+
+function clearWorkflowDraftPersistence() {
+  if (workflowDraftPersistTimer) {
+    window.clearTimeout(workflowDraftPersistTimer);
+    workflowDraftPersistTimer = null;
+  }
+
+  const persistResult = window.api?.store?.set?.(DRAFT_STORE_KEY, null);
+  if (persistResult && typeof persistResult.catch === 'function') {
+    persistResult.catch(() => {});
+  }
+}
+
+function buildWorkflowDraftPayload() {
+  return normalizeWorkflowDraft({
+    workflowId: getWorkflowById(activeWorkflowId)?.id || null,
+    name: $('workflow-name')?.value || '',
+    script: $('workflow-text')?.value || '',
+    workflowFileName: runtimeState.workflowFileName || ''
+  });
+}
+
+function scheduleWorkflowDraftPersistence() {
+  if (workflowDraftPersistTimer) {
+    window.clearTimeout(workflowDraftPersistTimer);
+  }
+
+  workflowDraftPersistTimer = window.setTimeout(() => {
+    workflowDraftPersistTimer = null;
+    const persistResult = window.api?.store?.set?.(DRAFT_STORE_KEY, buildWorkflowDraftPayload());
+    if (persistResult && typeof persistResult.catch === 'function') {
+      persistResult.catch(() => {});
+    }
+  }, DRAFT_PERSIST_DELAY_MS);
 }
 
 function getWorkflowById(workflowId) {
@@ -75,6 +128,21 @@ function getWorkflowById(workflowId) {
 
 function getWorkflowNameConflict(name, workflowId) {
   return savedWorkflows.find((workflow) => workflow.id !== workflowId && workflow.name.toLowerCase() === name.toLowerCase()) || null;
+}
+
+async function getStoredSequenceNames() {
+  try {
+    const storedSequences = await window.api.store.get('saved-sequences');
+    return new Set(
+      Array.isArray(storedSequences)
+        ? storedSequences
+            .map((sequence) => String(sequence?.name || '').trim().toLowerCase())
+            .filter(Boolean)
+        : []
+    );
+  } catch {
+    return new Set();
+  }
 }
 
 function escapeHtml(value) {
@@ -222,7 +290,20 @@ export function syncWorkflowEditorFeedback(status = runtimeState.workflowStatus 
   }
 }
 
-export function loadWorkflowDraft({ name = '', script = '', workflowId = null, clearFileReference = false } = {}) {
+function applyWorkflowFileReference(workflowFileName = '') {
+  runtimeState.workflowFileName = workflowFileName;
+  document.dispatchEvent(new CustomEvent('workflow:file-meta-changed'));
+}
+
+export function loadWorkflowDraft({
+  name = '',
+  script = '',
+  workflowId = null,
+  clearFileReference = false,
+  workflowFileName = '',
+  persistDraft = false,
+  clearPersistedDraft = false
+} = {}) {
   const textarea = $('workflow-text');
   const nameInput = $('workflow-name');
 
@@ -234,18 +315,27 @@ export function loadWorkflowDraft({ name = '', script = '', workflowId = null, c
     textarea.value = script;
   }
 
-  activeWorkflowId = workflowId;
+  activeWorkflowId = workflowId && getWorkflowById(workflowId) ? workflowId : null;
   if (!runtimeState.workflowRunning) {
     runtimeState.workflowStatus = { state: 'idle', isRunning: false, message: 'IDLE', error: null };
   } else {
     runtimeState.workflowStatus = runtimeState.workflowStatus || { state: 'idle', isRunning: false, message: 'IDLE', error: null };
   }
+
   if (clearFileReference) {
     clearWorkflowFileContext();
+  } else {
+    applyWorkflowFileReference(workflowFileName || '');
   }
 
   renderWorkflowLibrary();
   syncWorkflowEditorFeedback(runtimeState.workflowStatus);
+
+  if (persistDraft) {
+    scheduleWorkflowDraftPersistence();
+  } else if (clearPersistedDraft) {
+    clearWorkflowDraftPersistence();
+  }
 }
 
 export function getSavedWorkflows() {
@@ -344,6 +434,13 @@ async function saveCurrentWorkflowToLibrary() {
     return;
   }
 
+  const sequenceNames = await getStoredSequenceNames();
+  if (sequenceNames.has(name.toLowerCase())) {
+    setLibraryState('workflow.library.errorDuplicate');
+    $('workflow-name')?.focus();
+    return;
+  }
+
   const now = Date.now();
   const workflow = {
     id: existing?.id || `workflow-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
@@ -360,6 +457,7 @@ async function saveCurrentWorkflowToLibrary() {
   ].sort((a, b) => b.updatedAt - a.updatedAt);
 
   await persistSavedWorkflows();
+  clearWorkflowDraftPersistence();
   renderWorkflowLibrary();
   setLibraryState(existing ? 'workflow.library.updated' : 'workflow.library.saved');
   notifyWorkflowLibraryChanged();
@@ -389,14 +487,18 @@ async function deleteSavedWorkflow(workflowId) {
   log({ workflow_library_deleted: workflow.name });
 }
 
-function createWorkflowCopyName(name) {
+async function createWorkflowCopyName(name) {
   const baseName = `${name} ${t('sequencer.copySuffix', 'Copy')}`;
-  if (!savedWorkflows.some((workflow) => workflow.name.toLowerCase() === baseName.toLowerCase())) {
+  const takenNames = new Set(savedWorkflows.map((workflow) => workflow.name.toLowerCase()));
+  const sequenceNames = await getStoredSequenceNames();
+  sequenceNames.forEach((sequenceName) => takenNames.add(sequenceName));
+
+  if (!takenNames.has(baseName.toLowerCase())) {
     return baseName;
   }
 
   let index = 2;
-  while (savedWorkflows.some((workflow) => workflow.name.toLowerCase() === `${baseName} ${index}`.toLowerCase())) {
+  while (takenNames.has(`${baseName} ${index}`.toLowerCase())) {
     index += 1;
   }
 
@@ -412,7 +514,7 @@ export async function duplicateWorkflowById(workflowId) {
   const now = Date.now();
   const duplicatedWorkflow = {
     id: `workflow-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-    name: createWorkflowCopyName(workflow.name),
+    name: await createWorkflowCopyName(workflow.name),
     script: workflow.script,
     createdAt: now,
     updatedAt: now
@@ -480,6 +582,18 @@ function bindWorkflowLibraryActions() {
   }
 }
 
+function bindWorkflowDraftPersistence() {
+  ['workflow-name', 'workflow-text'].forEach((id) => {
+    const element = $(id);
+    if (!element || element.dataset.draftBound === 'true') {
+      return;
+    }
+
+    element.dataset.draftBound = 'true';
+    element.addEventListener('input', scheduleWorkflowDraftPersistence);
+  });
+}
+
 function bindWorkflowExamples() {
   document.querySelectorAll('[data-example-id]').forEach((button) => {
     if (button.dataset.bound === 'true') {
@@ -497,7 +611,8 @@ function bindWorkflowExamples() {
         name: t(example.nameKey, 'Workflow Example'),
         script: example.script,
         workflowId: null,
-        clearFileReference: true
+        clearFileReference: true,
+        persistDraft: true
       });
       setLibraryState('workflow.library.exampleLoaded');
     });
@@ -519,13 +634,24 @@ function bindWorkflowEditorDecorations() {
 
 export async function initWorkflowLibrary() {
   bindWorkflowLibraryActions();
+  bindWorkflowDraftPersistence();
   bindWorkflowExamples();
   bindWorkflowEditorDecorations();
 
   try {
     const stored = await window.api.store.get(STORE_KEY);
     savedWorkflows = normalizeSavedWorkflows(stored);
-    renderWorkflowLibrary();
+    const storedDraft = normalizeWorkflowDraft(await window.api.store.get(DRAFT_STORE_KEY));
+    if (storedDraft) {
+      loadWorkflowDraft({
+        ...storedDraft,
+        workflowId: getWorkflowById(storedDraft.workflowId)?.id || null,
+        persistDraft: false,
+        clearPersistedDraft: false
+      });
+    } else {
+      renderWorkflowLibrary();
+    }
     setLibraryState('workflow.library.ready');
     notifyWorkflowLibraryChanged();
   } catch (error) {

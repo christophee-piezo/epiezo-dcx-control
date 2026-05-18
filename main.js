@@ -8,11 +8,13 @@ const sequenceEngine = require('./services/sequenceEngine');
 const teensyFlashService = require('./services/teensyFlashService');
 const workflowEngine = require('./services/workflowEngine');
 const ePiezo = require('./services/dcxService');
+const dcxStatusService = require('./services/dcxStatusService');
 
 const store = new Store();
 let mainWindow = null;
 let appShutdownStarted = false;
 let appShutdownPromise = null;
+let appShutdownPending = false;
 
 const AUTH_LEGACY_ACCOUNT_KEY = 'auth-account';
 const AUTH_USERS_KEY = 'auth-users';
@@ -26,10 +28,15 @@ const DEFAULT_SESSION_TIMEOUT_MINUTES = 15;
 const MIN_SESSION_TIMEOUT_MINUTES = 1;
 const MAX_SESSION_TIMEOUT_MINUTES = 480;
 const RENDERER_STORE_KEYS = new Set([
+  'alarm-history',
   'dcx-config',
   'method-home-favorites',
   'saved-sequences',
   'saved-workflows',
+  'sequence-editor-draft',
+  'tests-auto-save-data',
+  'tests-comparison-state',
+  'workflow-editor-draft',
   'ui-preferences'
 ]);
 
@@ -79,6 +86,47 @@ function assertRendererStoreKey(key) {
   }
 
   return normalizedKey;
+}
+
+function sanitizeFileNameSegment(value, fallback = 'export-data') {
+  const normalizedValue = String(value || '')
+    .trim()
+    .replace(/[<>:"/\\|?*]+/g, '-')
+    .replace(/\s+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '');
+
+  return normalizedValue || fallback;
+}
+
+function sanitizePathSegment(value, fallback = 'Test Data') {
+  const normalizedValue = String(value || '')
+    .trim()
+    .replace(/[<>:"/\\|?*]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  return normalizedValue || fallback;
+}
+
+function resolveDataExportFormat(filePath, preferredExtension = '.csv') {
+  const normalizedPreferredExtension = String(preferredExtension || '.csv').startsWith('.')
+    ? String(preferredExtension || '.csv').toLowerCase()
+    : `.${String(preferredExtension || 'csv').toLowerCase()}`;
+  const selectedExtension = path.extname(filePath).toLowerCase();
+  const resolvedFilePath = selectedExtension ? filePath : `${filePath}${normalizedPreferredExtension}`;
+  const resolvedExtension = path.extname(resolvedFilePath).toLowerCase();
+
+  return {
+    filePath: resolvedFilePath,
+    format: resolvedExtension === '.json' ? 'json' : 'csv'
+  };
+}
+
+function getDataExportContent(payload = {}, format = 'csv') {
+  return format === 'json'
+    ? String(payload.jsonContent || '{}')
+    : String(payload.csvContent || '');
 }
 
 function sanitizeStoredUser(user) {
@@ -448,6 +496,10 @@ ePiezo.on('horn-scan-progress', (progress) => {
   sendToRenderer('dcx:horn-scan-progress', progress);
 });
 
+dcxStatusService.on('status', (status) => {
+  sendToRenderer('dcx:status-monitor', status);
+});
+
 function hasSavedConnection(config) {
   if (!config) return false;
 
@@ -470,6 +522,14 @@ function createWindow() {
   });
 
   mainWindow.loadFile('index.html');
+  mainWindow.on('close', (event) => {
+    if (appShutdownStarted) {
+      return;
+    }
+
+    event.preventDefault();
+    requestAppShutdown();
+  });
   mainWindow.on('closed', () => {
     mainWindow = null;
   });
@@ -488,13 +548,107 @@ async function shutdownMainProcessServices() {
         shutdownTasks.push(workflowEngine.stop());
       }
 
-      shutdownTasks.push(ePiezo.disconnect());
+      dcxStatusService.stop();
+      shutdownTasks.push(ePiezo.disconnect({ skipActiveCheck: true }));
 
       await Promise.allSettled(shutdownTasks);
     })();
   }
 
   return appShutdownPromise;
+}
+
+function getShutdownWarningActivityLines(activity = {}) {
+  const lines = [];
+
+  if (activity.sonicsActive) {
+    lines.push('Sonics is active.');
+  }
+
+  if (activity.seekActive) {
+    lines.push('Seek is active.');
+  }
+
+  if (activity.scanActive) {
+    lines.push('Scan is active.');
+  }
+
+  return lines;
+}
+
+async function confirmShutdownForActiveOperation() {
+  const activity = typeof ePiezo.getShutdownActivitySnapshot === 'function'
+    ? ePiezo.getShutdownActivitySnapshot()
+    : { active: false, sonicsActive: false, seekActive: false, scanActive: false };
+
+  if (!activity.active) {
+    return {
+      confirmed: true,
+      activity
+    };
+  }
+
+  const detailLines = getShutdownWarningActivityLines(activity);
+  detailLines.push('If you continue, the app will stop the active operation before closing.');
+
+  const response = await dialog.showMessageBox(mainWindow || undefined, {
+    type: 'warning',
+    buttons: ['Stop and Close', 'Cancel'],
+    defaultId: 0,
+    cancelId: 1,
+    noLink: true,
+    title: 'Active Operation',
+    message: 'Sonics, seek, or scan is still active.',
+    detail: detailLines.join('\n')
+  });
+
+  return {
+    confirmed: response.response === 0,
+    activity
+  };
+}
+
+async function requestAppShutdown() {
+  if (appShutdownStarted || appShutdownPending) {
+    return;
+  }
+
+  appShutdownPending = true;
+
+  try {
+    const confirmation = await confirmShutdownForActiveOperation();
+    if (!confirmation.confirmed) {
+      return;
+    }
+
+    if (confirmation.activity?.active && typeof ePiezo.stopActiveOperationForShutdown === 'function') {
+      const stopResult = await ePiezo.stopActiveOperationForShutdown();
+      if (!stopResult?.success) {
+        await dialog.showMessageBox(mainWindow || undefined, {
+          type: 'error',
+          buttons: ['OK'],
+          defaultId: 0,
+          noLink: true,
+          title: 'Unable to Close',
+          message: 'The active operation could not be stopped.',
+          detail: stopResult?.error || 'Stop sonics, seek, or scan manually before closing the app.'
+        });
+        return;
+      }
+    }
+
+    appShutdownStarted = true;
+    await shutdownMainProcessServices();
+    app.quit();
+  } catch (error) {
+    console.error('[APP SHUTDOWN REQUEST ERROR]', error.message);
+    appShutdownStarted = false;
+    appShutdownPromise = null;
+  } finally {
+    if (!appShutdownStarted) {
+      appShutdownPending = false;
+    }
+  }
 }
 
 async function maybeRestoreFactoryFirmwareOnLaunch() {
@@ -599,6 +753,7 @@ async function getStatusInitSnapshot() {
 
 app.whenReady().then(async () => {
   Menu.setApplicationMenu(null) // removes app menu globally
+  dcxStatusService.start();
   createWindow();
 
   ipcMain.handle('store:set', (_, key, value) => {
@@ -1026,7 +1181,7 @@ app.whenReady().then(async () => {
 });
 
   ipcMain.handle('dcx:control', async (_, payload) => {
-    return ePiezo.control(payload?.action, payload?.value);
+    return ePiezo.control(payload?.action, payload?.value, payload?.options || {});
   });
 
   ipcMain.handle('dcx:getStatus', async () => {
@@ -1035,6 +1190,10 @@ app.whenReady().then(async () => {
 
   ipcMain.handle('dcx:getStatusInitSnapshot', async () => {
     return getStatusInitSnapshot();
+  });
+
+  ipcMain.handle('dcx:getStatusMonitorSnapshot', async () => {
+    return dcxStatusService.getSnapshot();
   });
 
   ipcMain.handle('dcx:getSystemInfo', async () => {
@@ -1144,6 +1303,18 @@ app.whenReady().then(async () => {
 
   ipcMain.handle('dcx:getIoLiveSnapshot', async () => {
     return ePiezo.getIoLiveSnapshot();
+  });
+
+  ipcMain.handle('dcx:getIoConfiguration', async () => {
+    return ePiezo.getIoConfiguration();
+  });
+
+  ipcMain.handle('dcx:setIoConfiguration', async (_, payload) => {
+    return ePiezo.setIoConfiguration(payload || {});
+  });
+
+  ipcMain.handle('dcx:restoreIoConfigurationDefaults', async () => {
+    return ePiezo.restoreIoConfigurationDefaults();
   });
 
   ipcMain.handle('dcx:listSerialPorts', async () => {
@@ -1331,6 +1502,56 @@ app.whenReady().then(async () => {
     };
   });
 
+  ipcMain.handle('data-export:save-file', async (_, payload = {}) => {
+    const suggestedName = String(payload.suggestedName || 'export-data.csv').trim() || 'export-data.csv';
+    const result = await dialog.showSaveDialog(mainWindow, {
+      title: String(payload.title || 'Export Data'),
+      defaultPath: suggestedName,
+      filters: [
+        { name: 'CSV Files', extensions: ['csv'] },
+        { name: 'JSON Files', extensions: ['json'] },
+        { name: 'All Files', extensions: ['*'] }
+      ]
+    });
+
+    if (result.canceled || !result.filePath) {
+      return { success: false, canceled: true };
+    }
+
+    const { filePath, format } = resolveDataExportFormat(result.filePath, payload.preferredExtension || '.csv');
+    const content = getDataExportContent(payload, format);
+
+    await fs.writeFile(filePath, content, 'utf8');
+
+    return {
+      success: true,
+      format,
+      filePath,
+      fileName: path.basename(filePath)
+    };
+  });
+
+  ipcMain.handle('data-export:auto-save-file', async (_, payload = {}) => {
+    const folderName = sanitizePathSegment(payload.folderName || 'Test Data', 'Test Data');
+    const documentsRoot = app.getPath('documents');
+    const exportDirectory = path.join(documentsRoot, 'Epiezo DCX Control', folderName);
+    const desiredFileName = sanitizeFileNameSegment(payload.fileName || 'export-data', 'export-data');
+    const preferredExtension = payload.preferredExtension || '.csv';
+    const { filePath, format } = resolveDataExportFormat(path.join(exportDirectory, desiredFileName), preferredExtension);
+    const content = getDataExportContent(payload, format);
+
+    await fs.mkdir(exportDirectory, { recursive: true });
+    await fs.writeFile(filePath, content, 'utf8');
+
+    return {
+      success: true,
+      format,
+      directory: exportDirectory,
+      filePath,
+      fileName: path.basename(filePath)
+    };
+  });
+
   setTimeout(async () => {
     try {
       await maybeRestoreFactoryFirmwareOnLaunch();
@@ -1351,14 +1572,6 @@ app.on('before-quit', (event) => {
     return;
   }
 
-  appShutdownStarted = true;
   event.preventDefault();
-
-  shutdownMainProcessServices()
-    .catch((error) => {
-      console.error('[APP SHUTDOWN ERROR]', error.message);
-    })
-    .finally(() => {
-      app.quit();
-    });
+  requestAppShutdown();
 });

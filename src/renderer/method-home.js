@@ -273,7 +273,8 @@ function resetWorkflowDraft() {
     name: '',
     script: '',
     workflowId: null,
-    clearFileReference: true
+    clearFileReference: true,
+    clearPersistedDraft: true
   });
 
   const workflowState = $('workflow-library-state');
@@ -311,7 +312,7 @@ function bindMethodHomeTemplates() {
   if (newSequenceButton && newSequenceButton.dataset.bound !== 'true') {
     newSequenceButton.dataset.bound = 'true';
     newSequenceButton.addEventListener('click', () => {
-      loadSequenceDraft();
+      loadSequenceDraft({ clearPersistedDraft: true });
       navigateTo('sequencer');
     });
   }

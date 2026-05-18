@@ -20,7 +20,7 @@ export function MethodView() {
                 Create New
               </div>
 
-              <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+              <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-5">
                 <button
                   className="rounded-2xl border border-black bg-black px-4 py-5 text-left text-white shadow-sm transition-transform hover:-translate-y-0.5 hover:bg-neutral-900 disabled:cursor-not-allowed disabled:opacity-60"
                   data-method-home-action="new-sequence"

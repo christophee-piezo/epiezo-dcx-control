@@ -83,6 +83,25 @@ class DcxEthernetService {
       data: response.data
     };
   }
+
+  async postIoConfigurationUpdate(body = '') {
+    if (!this.isConnected()) {
+      throw new Error('Ethernet transport is not connected');
+    }
+
+    const url = `${this.baseUrl}/func=9cmd=0?${body}`;
+    const response = await this.session.post(url, body, {
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded'
+      },
+      transformRequest: [(data) => data]
+    });
+
+    return {
+      status: response.status,
+      data: response.data
+    };
+  }
 }
 
 module.exports = DcxEthernetService;

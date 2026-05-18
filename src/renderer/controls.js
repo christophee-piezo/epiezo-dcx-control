@@ -10,35 +10,6 @@ import { initWorkflowLibrary, loadWorkflowDraft, syncWorkflowEditorFeedback } fr
 let sequenceRunning = false;
 let lastHeartbeatLogSignature = null;
 
-const ACTIVE_IO_OUTPUT_PINS = ['PIN15', 'PIN1'];
-
-function getIoDigitalState(entry) {
-  if (!entry) {
-    return null;
-  }
-
-  const rawValue = String(entry.rawValue ?? '').trim().toUpperCase();
-  if (['1', 'ON', 'TRUE', 'READY', 'ACTIVE', 'HIGH'].includes(rawValue)) {
-    return true;
-  }
-
-  if (['0', 'OFF', 'FALSE', 'IDLE', 'INACTIVE', 'LOW'].includes(rawValue)) {
-    return false;
-  }
-
-  if (entry.numericValue == null) {
-    return null;
-  }
-
-  return Boolean(entry.numericValue);
-}
-
-function isIoOutputActive(pin) {
-  const ioEntry = runtimeState.ioSnapshot?.entries?.[pin] || null;
-  const ioState = getIoDigitalState(ioEntry);
-  return ioState == null ? false : ioState;
-}
-
 function getModeSwitchBlockedMessage(action = 'switch') {
   return action === 'disconnect'
     ? 'Stop sonics, seek, or scan before disconnecting.'
@@ -47,18 +18,7 @@ function getModeSwitchBlockedMessage(action = 'switch') {
 
 function isManualControlActive() {
   const telemetry = getResolvedTelemetry(runtimeState.lastTelemetry || {});
-
-  if (runtimeState.connections?.teensy) {
-    return Boolean(runtimeState.hornScanRunning || telemetry.active || telemetry.seek);
-  }
-
-  return Boolean(
-    runtimeState.hornScanRunning
-    ||
-    telemetry.active
-    || telemetry.seek
-    || ACTIVE_IO_OUTPUT_PINS.some((pin) => isIoOutputActive(pin))
-  );
+  return Boolean(runtimeState.hornScanRunning || telemetry.active || telemetry.seek);
 }
 
 function isBransonRunIndicatorActive() {
@@ -67,15 +27,6 @@ function isBransonRunIndicatorActive() {
   }
 
   const telemetry = getResolvedTelemetry(runtimeState.lastTelemetry || {});
-
-  if (runtimeState.connections?.teensy) {
-    return Boolean(telemetry.active || telemetry.seek);
-  }
-
-  if (runtimeState.connections?.ethernet) {
-    return ACTIVE_IO_OUTPUT_PINS.some((pin) => isIoOutputActive(pin));
-  }
-
   return Boolean(telemetry.active || telemetry.seek);
 }
 
@@ -105,17 +56,26 @@ function isOnline() {
   return String(runtimeState.status || 'offline').toLowerCase() === 'online';
 }
 
-function hasDashboardEthernetTransport() {
-  return Boolean(runtimeState.simulation || runtimeState.connections?.ethernet);
-}
-
 function hasDashboardTeensyTransport() {
   return Boolean(runtimeState.simulation || runtimeState.connections?.teensy);
 }
 
+export function hasTeensyControlSource() {
+  return Boolean(runtimeState.simulation || runtimeState.connections?.teensy);
+}
+
+function ensureTeensyControlSource(context) {
+  if (hasTeensyControlSource()) {
+    return { success: true };
+  }
+
+  const error = `Connect Teensy serial or start simulation before ${context}.`;
+  showFooterFeedback(error, { tone: 'error', timeout: 8000 });
+  return { success: false, error };
+}
+
 function syncDashboardManualControlState() {
   const executionActive = Boolean(sequenceRunning || runtimeState.workflowRunning || runtimeState.hornScanRunning);
-  const hasEthernetTransport = hasDashboardEthernetTransport();
   const hasTeensyTransport = hasDashboardTeensyTransport();
   const startButton = $('start-btn');
   const stopButton = $('stop-btn');
@@ -128,15 +88,15 @@ function syncDashboardManualControlState() {
   }
 
   if (seekButton) {
-    seekButton.disabled = executionActive || !hasEthernetTransport;
+    seekButton.disabled = executionActive || !hasTeensyTransport;
   }
 
   if (resetButton) {
-    resetButton.disabled = executionActive || !hasEthernetTransport;
+    resetButton.disabled = executionActive || !hasTeensyTransport;
   }
 
   if (amplitudeInput) {
-    amplitudeInput.disabled = executionActive || !hasEthernetTransport;
+    amplitudeInput.disabled = executionActive || !hasTeensyTransport;
   }
 
   if (stopButton) {
@@ -210,6 +170,7 @@ function formatWorkflowStatus(status = {}) {
 function syncWorkflowUiLockState() {
   const workflowRunning = Boolean(runtimeState.workflowRunning);
   const executionActive = Boolean(workflowRunning || sequenceRunning || runtimeState.hornScanRunning);
+  const hasTeensyTransport = hasTeensyControlSource();
   const workflowStopButton = $('stop-workflow-btn');
   const workflowRunButton = $('run-workflow-btn');
   const workflowLoadButton = $('load-workflow-btn');
@@ -221,7 +182,7 @@ function syncWorkflowUiLockState() {
   }
 
   if (workflowRunButton) {
-    workflowRunButton.disabled = executionActive;
+    workflowRunButton.disabled = executionActive || !hasTeensyTransport;
   }
 
   if (workflowLoadButton) {
@@ -259,7 +220,7 @@ function syncWorkflowUiLockState() {
 
   const runSequenceButton = $('run-sequence-btn');
   if (runSequenceButton) {
-    runSequenceButton.disabled = executionActive;
+    runSequenceButton.disabled = executionActive || !hasTeensyTransport;
   }
 
   const clearTimelineButton = $('clear-timeline-btn');
@@ -488,6 +449,17 @@ export async function runSequenceFromUi() {
     return { success: false, error: 'A graph capture is currently running' };
   }
 
+  const teensyControlResult = ensureTeensyControlSource('running a sequence');
+  if (!teensyControlResult.success) {
+    setSequenceUiState({
+      state: 'idle',
+      isRunning: false,
+      message: 'ERROR',
+      error: teensyControlResult.error
+    });
+    return teensyControlResult;
+  }
+
   if (runtimeState.workflowRunning) {
     log({ sequence_error: 'Stop the active workflow before running a sequence.' });
     showFooterFeedback('Stop the active workflow before running a sequence.', { tone: 'error', timeout: 8000 });
@@ -528,6 +500,12 @@ export async function runWorkflowFromUi() {
     const res = { success: false, error: 'A graph capture is currently running' };
     setWorkflowUiState({ state: 'idle', isRunning: false, message: 'ERROR', error: res.error });
     return res;
+  }
+
+  const teensyControlResult = ensureTeensyControlSource('running a workflow');
+  if (!teensyControlResult.success) {
+    setWorkflowUiState({ state: 'idle', isRunning: false, message: 'ERROR', error: teensyControlResult.error });
+    return teensyControlResult;
   }
 
   if (sequenceRunning) {
@@ -582,11 +560,10 @@ async function loadWorkflowScriptFromFile() {
       name: (res.fileName || '').replace(/\.[^.]+$/, ''),
       script: res.content || '',
       workflowId: null,
-      clearFileReference: false
+      clearFileReference: false,
+      workflowFileName: res.fileName || '',
+      persistDraft: true
     });
-
-    runtimeState.workflowFileName = res.fileName || '';
-    updateWorkflowFileLabel();
     log({ workflow_loaded: { fileName: res.fileName, filePath: res.filePath } });
     showFooterFeedback(`Workflow loaded: ${res.fileName || 'script'}`, { tone: 'success', timeout: 4000 });
   } catch (error) {
@@ -714,10 +691,10 @@ export async function loadSystemInfo() {
   }
 }
 
-async function control(action, value) {
+async function control(action, value, options = {}) {
   try {
-    const res = await window.api.dcx.control({ action, value });
-    log({ action, value, res });
+    const res = await window.api.dcx.control({ action, value, options });
+    log({ action, value, options, res });
 
     if (!res?.success) {
       showFooterFeedback(`${actionLabel(action)} failed: ${res?.error || res?.message || 'Operation failed'}`, { tone: 'error', timeout: 8000 });
@@ -866,7 +843,7 @@ async function updateAmplitudeFromUi() {
     return;
   }
 
-  await control('setAmp', { weldAmp: amp });
+  await control('setAmp', { weldAmp: amp }, { transport: 'serial' });
 }
 
 async function ensureHardwareConnectedForStart() {
@@ -948,13 +925,13 @@ export function initButtons() {
       return;
     }
 
-    const shouldUseEthernetAmplitude = hasDashboardEthernetTransport();
-    const amp = shouldUseEthernetAmplitude ? readUiAmplitude({ fallback: 50 }) : null;
-    if (shouldUseEthernetAmplitude && amp == null) {
+    const shouldUseTeensyAmplitude = hasTeensyControlSource();
+    const amp = shouldUseTeensyAmplitude ? readUiAmplitude({ fallback: 50 }) : null;
+    if (shouldUseTeensyAmplitude && amp == null) {
       return;
     }
 
-    await control('start', shouldUseEthernetAmplitude ? amp : undefined);
+    await control('start', shouldUseTeensyAmplitude ? amp : undefined);
   });
 
   $('stop-btn')?.addEventListener('click', async () => {
@@ -970,8 +947,8 @@ export function initButtons() {
 
     await control('stop');
   });
-  $('seek-btn')?.addEventListener('click', () => control('seek'));
-  $('reset-btn')?.addEventListener('click', () => control('reset'));
+  $('seek-btn')?.addEventListener('click', () => control('seek', undefined, { transport: 'serial' }));
+  $('reset-btn')?.addEventListener('click', () => control('reset', undefined, { transport: 'serial' }));
 
   $('run-sequence-btn')?.addEventListener('click', async () => {
     if (sequenceRunning) {
@@ -1109,5 +1086,18 @@ export function heartbeatLoop() {
 export function initTelemetrySubscription() {
   window.api?.dcx?.onTelemetry?.((telemetry) => {
     updateTelemetry(telemetry);
+  });
+}
+
+export function initStatusMonitorSubscription() {
+  window.api?.dcx?.onStatusMonitor?.((snapshot) => {
+    if (!snapshot) {
+      return;
+    }
+
+    updateStatus(snapshot);
+    if (snapshot.telemetry) {
+      updateTelemetry(snapshot.telemetry);
+    }
   });
 }

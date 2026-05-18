@@ -25,8 +25,8 @@ const ioAnalogInputs = [
 ];
 
 const ioAnalogOutputs = [
-  { id: 'settings-io-power-out', pin: 'J3-24', label: 'Power Out (V)', key: 'settings.io.powerOut', value: '00.00' },
-  { id: 'settings-io-amplitude-out', pin: 'J3-25', label: 'Amplitude Out (V)', key: 'settings.io.amplitudeOut', value: '00.00' }
+  { id: 'settings-io-power-out', labelId: 'settings-io-analog-output-24-label', pin: 'J3-24', label: 'Frequency Out (V)', key: 'settings.io.frequencyOutVoltage', value: '00.00' },
+  { id: 'settings-io-amplitude-out', labelId: 'settings-io-analog-output-25-label', pin: 'J3-25', label: 'Amplitude Out (V)', key: 'settings.io.amplitudeOut', value: '00.00' }
 ];
 
 const ioConfigurationDigitalInputOptions = [
@@ -64,9 +64,9 @@ const ioConfigurationAnalogOutputOptions = [
 ];
 
 const ioConfigurationDigitalInputs = [
-  { pin: 'J3 - 1', checkboxId: 'settings-io-config-input-1-enabled', selectId: 'settings-io-config-input-1-select', voltageName: 'settings-io-config-input-1-voltage', defaultValue: 'externalStart' },
+  { pin: 'J3 - 1', checkboxId: 'settings-io-config-input-1-enabled', selectId: 'settings-io-config-input-1-select', voltageName: 'settings-io-config-input-1-voltage', defaultValue: 'externalReset' },
   { pin: 'J3 - 2', checkboxId: 'settings-io-config-input-2-enabled', selectId: 'settings-io-config-input-2-select', voltageName: 'settings-io-config-input-2-voltage', defaultValue: 'externalSeek' },
-  { pin: 'J3 - 3', checkboxId: 'settings-io-config-input-3-enabled', selectId: 'settings-io-config-input-3-select', voltageName: 'settings-io-config-input-3-voltage', defaultValue: 'externalReset' },
+  { pin: 'J3 - 3', checkboxId: 'settings-io-config-input-3-enabled', selectId: 'settings-io-config-input-3-select', voltageName: 'settings-io-config-input-3-voltage', defaultValue: 'externalStart' },
   { pin: 'J3 - 4', checkboxId: 'settings-io-config-input-4-enabled', selectId: 'settings-io-config-input-4-select', voltageName: 'settings-io-config-input-4-voltage', defaultValue: 'memoryClear' }
 ];
 
@@ -157,7 +157,7 @@ const manualControlItems = [
 const sequenceWorkflowItems = [
   { title: 'Sequence', titleKey: 'settings.docs.methods.sequenceTitle', body: 'Use the Sequence view to build timed pulse and pause blocks with configurable amplitudes and ramps.', bodyKey: 'settings.docs.methods.sequenceBody' },
   { title: 'Workflow', titleKey: 'settings.docs.methods.workflowTitle', body: 'Use the Workflow view for step-by-step procedures that combine start, stop, seek, reset, waits, and amplitude changes.', bodyKey: 'settings.docs.methods.workflowBody' },
-  { title: 'Review', titleKey: 'settings.docs.methods.reviewTitle', body: 'Use Alarm Log and System Output in Settings to review what happened during a run.', bodyKey: 'settings.docs.methods.reviewBody' }
+  { title: 'Review', titleKey: 'settings.docs.methods.reviewTitle', body: 'Use Journal in Settings to review what happened during a run.', bodyKey: 'settings.docs.methods.reviewBody' }
 ];
 
 const documentationLimitRows = [
@@ -168,7 +168,7 @@ const documentationLimitRows = [
 
 const documentationMetadataItems = [
   { label: 'Document Type', labelKey: 'settings.docs.meta.docType', value: 'Operator Guide', valueKey: 'settings.docs.meta.docTypeValue' },
-  { label: 'Control Policy', labelKey: 'settings.docs.meta.controlPolicy', value: 'Sonics routed through Teensy', valueKey: 'settings.docs.meta.controlPolicyValue' },
+  { label: 'Control Policy', labelKey: 'settings.docs.meta.controlPolicy', value: 'Operational controls through Teensy', valueKey: 'settings.docs.meta.controlPolicyValue' },
   { label: 'Hardware Mode', labelKey: 'settings.docs.meta.hardwareMode', value: 'Branson HTTP + Teensy Serial', valueKey: 'settings.docs.meta.hardwareModeValue' },
   { label: 'Simulation Mode', labelKey: 'settings.docs.meta.simulationMode', value: 'Internal software model', valueKey: 'settings.docs.meta.simulationModeValue' }
 ];
@@ -176,12 +176,12 @@ const documentationMetadataItems = [
 const documentationNoticeItems = [
   { title: 'Hardware Mode', titleKey: 'settings.docs.notice.hardwareTitle', body: 'Hardware mode initializes the Branson controller and the Teensy interface together before operation.', bodyKey: 'settings.docs.notice.hardwareBody' },
   { title: 'Sonics Control', titleKey: 'settings.docs.notice.sonicsTitle', body: 'Start and Stop sonics are intentionally issued only through Teensy commands START and STOP.', bodyKey: 'settings.docs.notice.sonicsBody' },
-  { title: 'Branson Functions', titleKey: 'settings.docs.notice.bransonTitle', body: 'Status readback, seek, reset, and parameter writes remain on the Branson HTTP control path.', bodyKey: 'settings.docs.notice.bransonBody' }
+  { title: 'Branson Functions', titleKey: 'settings.docs.notice.bransonTitle', body: 'Settings-page seek, scan, reset, and controller readback remain on the Branson HTTP control path.', bodyKey: 'settings.docs.notice.bransonBody' }
 ];
 
 const transportModeItems = [
-  { title: 'Branson HTTP', titleKey: 'settings.docs.transports.httpTitle', body: 'Handles status readback, seek, reset, and parameter writes through Branson function/cmd endpoints.', bodyKey: 'settings.docs.transports.httpBody', mapping: 'HTTP function/cmd' },
-  { title: 'Teensy Serial', titleKey: 'settings.docs.transports.serialTitle', body: 'Handles sonics enable commands in hardware mode by sending START and STOP to the Teensy.', bodyKey: 'settings.docs.transports.serialBody', mapping: 'Serial START / STOP' },
+  { title: 'Branson HTTP', titleKey: 'settings.docs.transports.httpTitle', body: 'Handles Settings-page seek/scan/reset actions, status readback, and parameter writes through Branson function/cmd endpoints.', bodyKey: 'settings.docs.transports.httpBody', mapping: 'HTTP function/cmd' },
+  { title: 'Teensy Serial', titleKey: 'settings.docs.transports.serialTitle', body: 'Handles start/stop plus workflow amplitude, seek, and reset commands through the Teensy serial interface.', bodyKey: 'settings.docs.transports.serialBody', mapping: 'Serial control path' },
   { title: 'Simulation', titleKey: 'settings.docs.transports.simTitle', body: 'Simulates telemetry and state changes for safe UI validation without live hardware.', bodyKey: 'settings.docs.transports.simBody', mapping: 'Software simulation' }
 ];
 
@@ -235,8 +235,8 @@ const teensyDacRows = [
 ];
 
 const teensyAdcRows = [
-  { pin: 'AIN0', signal: 'ADS1015', role: 'FREQUENCY_OUT.' },
-  { pin: 'AIN1', signal: 'ADS1015', role: 'AMPLITUDE_OUT.' },
+  { pin: 'AIN0', signal: 'ADS1015', role: 'AMPLITUDE_OUT.' },
+  { pin: 'AIN1', signal: 'ADS1015', role: 'FREQUENCY_OUT.' },
   { pin: 'AIN2', signal: 'ADS1015', role: 'BNC 1.' },
   { pin: 'AIN3', signal: 'ADS1015', role: 'BNC 5.' }
 ];
@@ -244,10 +244,8 @@ const teensyAdcRows = [
 function RoutingField({ id, label }) {
   return (
     <FormField label={label} labelKey={id.replace('route-', 'settings.routing.')}>
-      <NativeSelect defaultValue="mode" id={id}>
-        <option data-i18n="settings.routing.followMainMode" value="mode">Follow Main Mode</option>
+      <NativeSelect defaultValue="http" disabled id={id}>
         <option data-i18n="settings.routing.ethernet" value="http">Ethernet (DCX)</option>
-        <option data-i18n="settings.routing.serial" value="serial">Teensy (Serial)</option>
       </NativeSelect>
     </FormField>
   );
@@ -272,11 +270,11 @@ function IoDigitalRow({ indicatorId, label, pin, translationKey, type = 'dot' })
   );
 }
 
-function IoAnalogRow({ label, pin, translationKey, value, valueId }) {
+function IoAnalogRow({ label, labelId, pin, translationKey, value, valueId }) {
   return (
     <div className="io-channel io-channel-analog">
       <span className="io-pin">{pin}</span>
-      <span className="io-label" data-i18n={translationKey}>{label}</span>
+      <span className="io-label" data-i18n={translationKey} id={labelId}>{label}</span>
       <span className="io-reading" id={valueId}>{value}</span>
     </div>
   );
@@ -530,7 +528,7 @@ export function SettingsView(authProps) {
               <SettingsTabButton id="setup" label="Setup" translationKey="settings.tabs.setup" />
               <SettingsTabButton id="io" label="I/O Configuration" translationKey="settings.tabs.io" />
               <SettingsTabButton id="signature" label="Seek & Horn Signature" translationKey="settings.tabs.signature" />
-              <SettingsTabButton id="alarms" label="Alarm Log" translationKey="settings.tabs.alarms" />
+              <SettingsTabButton id="alarms" label="Journal" translationKey="settings.tabs.alarms" />
               <SettingsTabButton id="docs" label="Help & Docs" translationKey="settings.tabs.docs" />
             </div>
 
@@ -565,7 +563,7 @@ export function SettingsView(authProps) {
                   <CardDescription data-i18n="settings.system.description">Run operator-side maintenance actions for the connected controller.</CardDescription>
                 </CardHeader>
                 <CardContent className="grid gap-4">
-                  <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] xl:items-end">
+                  <div className="grid gap-4 2xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] 2xl:items-end">
                     <FormField label="Teensy Loader CLI" labelKey="settings.teensyFlash.loader">
                       <div className="grid gap-2">
                         <Input data-i18n-placeholder="settings.teensyFlash.loaderPlaceholder" id="settings-teensy-loader-path" placeholder="Use teensy_loader_cli.exe from PATH or select an executable" readOnly type="text" />
@@ -709,7 +707,7 @@ export function SettingsView(authProps) {
                     <section className="grid gap-4 rounded-xl border border-border/70 bg-background/55 p-4">
                       <div className="space-y-1">
                         <h3 className="text-base font-semibold text-foreground" data-i18n="settings.routing.title">Control Routing</h3>
-                        <p className="text-sm text-muted-foreground" data-i18n="settings.routing.description">Delegate each command family to Ethernet, serial, or the main mode.</p>
+                        <p className="text-sm text-muted-foreground" data-i18n="settings.routing.description">Settings page controls use Ethernet (DCX) only.</p>
                       </div>
 
                       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
@@ -738,11 +736,11 @@ export function SettingsView(authProps) {
                         ))}
                       </IoPanel>
 
-                      <IoPanel title="Analog Outputs" translationKey="settings.io.analogOutputs">
-                        {ioAnalogOutputs.map((channel) => (
-                          <IoAnalogRow key={channel.pin} label={channel.label} pin={channel.pin} translationKey={channel.key} value={channel.value} valueId={channel.id} />
-                        ))}
-                      </IoPanel>
+                        <IoPanel title="Analog Outputs" translationKey="settings.io.analogOutputs">
+                          {ioAnalogOutputs.map((channel) => (
+                            <IoAnalogRow key={channel.pin} label={channel.label} labelId={channel.labelId} pin={channel.pin} translationKey={channel.key} value={channel.value} valueId={channel.id} />
+                          ))}
+                        </IoPanel>
                     </div>
                   </div>
 
@@ -823,7 +821,6 @@ export function SettingsView(authProps) {
               <Card className="min-w-0">
                 <CardHeader>
                   <CardTitle data-i18n="settings.signature.title">Seek & Horn Signature Graph</CardTitle>
-                  <CardDescription data-i18n="settings.signature.description">Switch between 5-second weld data capture and horn signature scanning in one workspace.</CardDescription>
                 </CardHeader>
                 <CardContent className="grid gap-5">
                   <div className="signature-mode-switch flex flex-wrap gap-2 rounded-xl border border-border/70 bg-background/65 p-1">
@@ -833,10 +830,6 @@ export function SettingsView(authProps) {
                     <Button className="flex-1 text-muted-foreground sm:flex-none" data-signature-mode="hornSignature" id="settings-signature-mode-horn" size="sm" type="button" variant="ghost">
                       <span data-i18n="settings.signature.hornSignatureGraph">Horn Signature Graph</span>
                     </Button>
-                  </div>
-
-                  <div className="signature-mode-copy rounded-xl border border-border/60 bg-muted/18 px-4 py-3">
-                    <p className="text-sm text-muted-foreground" id="settings-signature-mode-description">Capture 5 seconds of welding data and view or export the selected parameters.</p>
                   </div>
 
                   <section className="signature-panel grid gap-5">
@@ -980,7 +973,7 @@ export function SettingsView(authProps) {
             <section className="hidden grid gap-4" data-settings-panel="alarms" id="settings-panel-alarms">
               <Card className="min-w-0">
                 <CardHeader>
-                  <CardTitle data-i18n="settings.alarms.title">Alarm Log</CardTitle>
+                  <CardTitle data-i18n="settings.alarms.title">Journal</CardTitle>
                   <CardDescription data-i18n="settings.alarms.description">Track alarm transitions detected from live telemetry.</CardDescription>
                 </CardHeader>
                 <CardContent>
@@ -1002,26 +995,6 @@ export function SettingsView(authProps) {
                   </div>
                 </CardContent>
               </Card>
-
-              <Card className="min-w-0">
-                <CardHeader>
-                  <CardTitle data-i18n="settings.output.title">System Output</CardTitle>
-                  <CardDescription data-i18n="settings.output.description">Review raw operator and controller output entries.</CardDescription>
-                </CardHeader>
-                <CardContent>
-                  <div className="data-table-shell min-h-[18rem] max-h-[26rem] overflow-y-auto rounded-xl border border-border/60 bg-background/80" id="output">
-                    <table className="data-table">
-                      <thead>
-                        <tr>
-                          <th className="w-36" data-i18n="settings.diagnostics.time">Time</th>
-                          <th data-i18n="settings.diagnostics.data">Data</th>
-                        </tr>
-                      </thead>
-                      <tbody id="output-body" />
-                    </table>
-                  </div>
-                </CardContent>
-              </Card>
             </section>
 
             <section className="hidden grid gap-4" data-settings-panel="docs" id="settings-panel-docs">
@@ -1032,7 +1005,7 @@ export function SettingsView(authProps) {
                 </CardHeader>
                 <CardContent className="grid gap-4">
                   <section className="rounded-2xl border border-primary/20 bg-primary/8 p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
-                    <div className="grid gap-4 xl:grid-cols-[minmax(0,1.15fr)_minmax(0,0.85fr)]">
+                    <div className="grid gap-4 2xl:grid-cols-[minmax(0,1.15fr)_minmax(0,0.85fr)]">
                       <div className="space-y-2">
                         <div className="text-[0.68rem] font-semibold uppercase tracking-[0.22em] text-primary/80" data-i18n="settings.docs.referenceEyebrow">Operator Reference</div>
                         <h3 className="text-lg font-semibold text-foreground" data-i18n="settings.docs.referenceTitle">DCX / Teensy Operating Reference</h3>
@@ -1058,7 +1031,7 @@ export function SettingsView(authProps) {
                     </div>
                   </DocumentationCard>
 
-                  <div className="grid gap-4 xl:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)]">
+                  <div className="grid gap-4 2xl:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)]">
                     <DocumentationCard description="Follow this standard procedure before any manual or automated run." descriptionKey="settings.docs.start.description" title="Standard Operating Procedure" translationKey="settings.docs.start.title">
                       <div className="grid gap-3">
                         {gettingStartedItems.map((item, index) => (
@@ -1097,7 +1070,7 @@ export function SettingsView(authProps) {
                     </div>
                   </DocumentationCard>
 
-                  <div className="grid gap-4 xl:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)]">
+                  <div className="grid gap-4 2xl:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)]">
                     <DocumentationCard description="These are the fastest controls for direct operator actions." descriptionKey="settings.docs.manual.description" title="Manual Controls" translationKey="settings.docs.manual.title">
                       <div className="grid gap-3">
                         {manualControlItems.map((item) => (

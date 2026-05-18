@@ -14,8 +14,8 @@ const navItems = [
 
 export function AppSidebar() {
   return (
-    <aside className="min-h-0 overflow-y-auto border-b border-border/70 bg-card/80 backdrop-blur-xl md:h-full md:overflow-hidden md:border-b-0 md:border-r">
-      <div className="flex min-h-full flex-col gap-4 p-3 md:h-full md:min-h-0 lg:p-4">
+    <aside className="min-h-0 overflow-y-auto border-b border-border/70 bg-card/80 backdrop-blur-xl lg:h-full lg:overflow-hidden lg:border-b-0 lg:border-r">
+      <div className="flex min-h-full flex-col gap-4 p-3 lg:h-full lg:min-h-0 lg:p-4">
         <div className="rounded-2xl border border-primary/15 bg-primary/8 p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
           <div className="flex items-center gap-3 text-primary">
             <div className="rounded-xl bg-primary/15 p-2.5">

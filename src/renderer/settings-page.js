@@ -8,6 +8,8 @@ import { getResolvedTelemetry, showFooterFeedback } from './status-ui.js';
 
 const SETTINGS_TABS = ['system', 'setup', 'io', 'signature', 'alarms', 'docs'];
 const IO_SUBTABS = ['diagnostic', 'configuration'];
+const ALARM_HISTORY_STORE_KEY = 'alarm-history';
+const MAX_ALARM_HISTORY_ENTRIES = 200;
 const MAX_SIGNATURE_SAMPLES = 240;
 const WELD_DATA_CAPTURE_MS = 5000;
 const IO_POLL_INTERVAL_MS = 10;
@@ -17,6 +19,28 @@ const DEFAULT_HORN_SCAN_DRAW_FROM = 38900;
 const DEFAULT_HORN_SCAN_DRAW_TO = 40900;
 const ROUTING_FIELD_IDS = ['route-amplitude', 'route-seek', 'route-reset'];
 const ANALOG_OUTPUT_ASSIGNMENT_SELECT_IDS = ['settings-io-config-analog-output-24-select', 'settings-io-config-analog-output-25-select'];
+const IO_CONFIGURATION_FIELDS = {
+  digitalInputs: [
+    { pin: 1, checkboxId: 'settings-io-config-input-1-enabled', selectId: 'settings-io-config-input-1-select', defaultAssignment: 'externalReset' },
+    { pin: 2, checkboxId: 'settings-io-config-input-2-enabled', selectId: 'settings-io-config-input-2-select', defaultAssignment: 'externalSeek' },
+    { pin: 3, checkboxId: 'settings-io-config-input-3-enabled', selectId: 'settings-io-config-input-3-select', defaultAssignment: 'externalStart' },
+    { pin: 4, checkboxId: 'settings-io-config-input-4-enabled', selectId: 'settings-io-config-input-4-select', defaultAssignment: 'memoryClear' }
+  ],
+  digitalOutputs: [
+    { pin: 7, checkboxId: 'settings-io-config-output-7-enabled', selectId: 'settings-io-config-output-7-select', defaultAssignment: 'ready' },
+    { pin: 8, checkboxId: 'settings-io-config-output-8-enabled', selectId: 'settings-io-config-output-8-select', defaultAssignment: 'sonicsActive' },
+    { pin: 9, checkboxId: 'settings-io-config-output-9-enabled', selectId: 'settings-io-config-output-9-select', defaultAssignment: 'generalAlarm' },
+    { pin: 10, checkboxId: 'settings-io-config-output-10-enabled', selectId: 'settings-io-config-output-10-select', defaultAssignment: 'seekScanOut' }
+  ],
+  analogInputs: [
+    { pin: 17, checkboxId: 'settings-io-config-analog-input-17-enabled', selectId: 'settings-io-config-analog-input-17-select', defaultAssignment: 'amplitudeIn' },
+    { pin: 18, checkboxId: 'settings-io-config-analog-input-18-enabled', selectId: 'settings-io-config-analog-input-18-select', defaultAssignment: 'frequencyOffset' }
+  ],
+  analogOutputs: [
+    { pin: 24, checkboxId: 'settings-io-config-analog-output-24-enabled', selectId: 'settings-io-config-analog-output-24-select', defaultAssignment: 'frequencyOut' },
+    { pin: 25, checkboxId: 'settings-io-config-analog-output-25-enabled', selectId: 'settings-io-config-analog-output-25-select', defaultAssignment: 'amplitudeOut' }
+  ]
+};
 const SETUP_INPUT_FIELDS = {
   weldAmp: {
     inputId: 'amplitude-input',
@@ -80,9 +104,32 @@ const IO_ANALOG_INPUT_READINGS = [
   ['PIN18', 'settings-io-frequency-offset']
 ];
 const IO_ANALOG_OUTPUT_READINGS = [
-  ['PIN24', 'settings-io-power-out', 'power'],
-  ['PIN25', 'settings-io-amplitude-out', 'amplitude']
+  {
+    pin: 'PIN24',
+    valueId: 'settings-io-power-out',
+    labelId: 'settings-io-analog-output-24-label',
+    selectId: 'settings-io-config-analog-output-24-select',
+    defaultOutput: 'frequencyOut'
+  },
+  {
+    pin: 'PIN25',
+    valueId: 'settings-io-amplitude-out',
+    labelId: 'settings-io-analog-output-25-label',
+    selectId: 'settings-io-config-analog-output-25-select',
+    defaultOutput: 'amplitudeOut'
+  }
 ];
+const FREQUENCY_OUTPUT_LIMITS_HZ = {
+  20000: { minimum: 19450, maximum: 20450 },
+  30000: { minimum: 29250, maximum: 30750 },
+  40000: { minimum: 38900, maximum: 40900 }
+};
+const ANALOG_OUTPUT_LABELS = {
+  unassign: { key: 'settings.io.unassign', fallback: 'UNASSIGN' },
+  frequencyOut: { key: 'settings.io.frequencyOutVoltage', fallback: 'Frequency Out (V)' },
+  powerOut: { key: 'settings.io.powerOut', fallback: 'Power Out (V)' },
+  amplitudeOut: { key: 'settings.io.amplitudeOut', fallback: 'Amplitude Out (V)' }
+};
 const SIGNATURE_CHART_SERIES = [
   {
     key: 'frequency',
@@ -167,6 +214,7 @@ let activeIoSubTab = 'diagnostic';
 let activeSignatureMode = 'weldData';
 let signatureChart = null;
 let signatureSamples = [];
+let alarmHistory = [];
 let previousAlarmState = false;
 let alarmEventCount = 0;
 let signatureAutoStopTimer = null;
@@ -178,6 +226,8 @@ let lastIoSnapshot = null;
 let setupLoading = false;
 let setupLoaded = false;
 let setupDefaultsLoading = false;
+let ioConfigurationLoading = false;
+let ioConfigurationLoaded = false;
 let weldGraphPreset = null;
 let weldGraphSummary = null;
 let hornScanPreset = null;
@@ -192,6 +242,93 @@ let teensyFlashStatusSubscriptionActive = false;
 
 function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value));
+}
+
+function normalizeAlarmHistory(value) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .map((entry) => {
+      const timestamp = Number(entry?.timestamp);
+      if (!Number.isFinite(timestamp)) {
+        return null;
+      }
+
+      return {
+        timestamp,
+        active: Boolean(entry?.active),
+        detail: typeof entry?.detail === 'string' ? entry.detail : ''
+      };
+    })
+    .filter(Boolean)
+    .slice(-MAX_ALARM_HISTORY_ENTRIES);
+}
+
+function persistAlarmHistory() {
+  const persistResult = window.api?.store?.set?.(ALARM_HISTORY_STORE_KEY, alarmHistory);
+  if (persistResult && typeof persistResult.catch === 'function') {
+    persistResult.catch(() => {});
+  }
+}
+
+function formatAlarmTimestamp(timestamp) {
+  return Number.isFinite(timestamp)
+    ? new Date(timestamp).toLocaleString()
+    : '--';
+}
+
+function renderAlarmLog() {
+  const body = $('alarm-log-body');
+  if (!body) {
+    return;
+  }
+
+  body.innerHTML = '';
+  alarmEventCount = alarmHistory.length;
+
+  if (!alarmHistory.length) {
+    const row = document.createElement('tr');
+    const cell = document.createElement('td');
+    cell.className = 'data-table-empty';
+    cell.colSpan = 3;
+    cell.textContent = t('settings.alarms.empty', 'No alarm events recorded yet.');
+    row.appendChild(cell);
+    body.appendChild(row);
+    return;
+  }
+
+  alarmHistory.forEach((entry) => {
+    const row = document.createElement('tr');
+    const timeCell = document.createElement('td');
+    const stateCell = document.createElement('td');
+    const detailCell = document.createElement('td');
+
+    timeCell.className = 'data-table-nowrap';
+    stateCell.className = 'font-semibold';
+    detailCell.className = 'text-muted-foreground';
+
+    timeCell.textContent = formatAlarmTimestamp(entry.timestamp);
+    stateCell.textContent = entry.active
+      ? t('settings.alarms.active', 'ACTIVE')
+      : t('settings.alarms.cleared', 'CLEAR');
+    detailCell.textContent = entry.detail;
+
+    row.append(timeCell, stateCell, detailCell);
+    body.appendChild(row);
+  });
+}
+
+async function loadAlarmHistory() {
+  try {
+    const storedAlarmHistory = normalizeAlarmHistory(await window.api.store.get(ALARM_HISTORY_STORE_KEY));
+    alarmHistory = normalizeAlarmHistory([...storedAlarmHistory, ...alarmHistory]);
+  } catch {
+    alarmHistory = normalizeAlarmHistory(alarmHistory);
+  }
+
+  renderAlarmLog();
 }
 
 function setInputValue(id, value) {
@@ -345,6 +482,208 @@ async function loadSetupDefaults() {
     return runtimeState.setupDefaults || {};
   } finally {
     setupDefaultsLoading = false;
+  }
+}
+
+function buildIoConfigurationGroupState(fields = []) {
+  return fields.reduce((nextState, field) => ({
+    ...nextState,
+    [`PIN${field.pin}`]: {
+      pin: `PIN${field.pin}`,
+      assignment: field.defaultAssignment,
+      enabled: true
+    }
+  }), {});
+}
+
+function buildDefaultIoConfigurationState() {
+  return {
+    systemType: '1',
+    lowselect: '0',
+    digitalInputs: buildIoConfigurationGroupState(IO_CONFIGURATION_FIELDS.digitalInputs),
+    digitalOutputs: buildIoConfigurationGroupState(IO_CONFIGURATION_FIELDS.digitalOutputs),
+    analogInputs: buildIoConfigurationGroupState(IO_CONFIGURATION_FIELDS.analogInputs),
+    analogOutputs: buildIoConfigurationGroupState(IO_CONFIGURATION_FIELDS.analogOutputs)
+  };
+}
+
+function normalizeIoConfigurationEntry(field, entry = {}) {
+  const assignment = String(entry.assignment || field.defaultAssignment || 'unassign').trim() || field.defaultAssignment || 'unassign';
+
+  return {
+    pin: `PIN${field.pin}`,
+    assignment,
+    enabled: entry.enabled == null ? true : Boolean(entry.enabled)
+  };
+}
+
+function normalizeIoConfigurationState(configuration = {}) {
+  const defaults = buildDefaultIoConfigurationState();
+  const nextConfiguration = {
+    ...defaults,
+    ...configuration,
+    digitalInputs: { ...defaults.digitalInputs },
+    digitalOutputs: { ...defaults.digitalOutputs },
+    analogInputs: { ...defaults.analogInputs },
+    analogOutputs: { ...defaults.analogOutputs }
+  };
+
+  Object.entries(IO_CONFIGURATION_FIELDS).forEach(([groupKey, fields]) => {
+    fields.forEach((field) => {
+      const pin = `PIN${field.pin}`;
+      nextConfiguration[groupKey][pin] = normalizeIoConfigurationEntry(
+        field,
+        configuration?.[groupKey]?.[pin] || nextConfiguration[groupKey]?.[pin] || defaults[groupKey]?.[pin]
+      );
+    });
+  });
+
+  nextConfiguration.systemType = String(configuration.systemType ?? defaults.systemType);
+  nextConfiguration.lowselect = String(configuration.lowselect ?? defaults.lowselect);
+  nextConfiguration.raw = String(configuration.raw || '');
+
+  return nextConfiguration;
+}
+
+function applyIoConfiguration(configuration = {}, { persist = true } = {}) {
+  const nextConfiguration = normalizeIoConfigurationState(configuration);
+
+  if (persist) {
+    runtimeState.ioConfiguration = nextConfiguration;
+  }
+
+  const activeConfiguration = persist
+    ? normalizeIoConfigurationState(runtimeState.ioConfiguration || {})
+    : nextConfiguration;
+
+  Object.entries(IO_CONFIGURATION_FIELDS).forEach(([groupKey, fields]) => {
+    fields.forEach((field) => {
+      const pin = `PIN${field.pin}`;
+      const entry = activeConfiguration?.[groupKey]?.[pin] || normalizeIoConfigurationEntry(field);
+      setToggleChecked(field.checkboxId, entry.enabled);
+
+      const select = $(field.selectId);
+      if (select) {
+        select.value = entry.assignment;
+      }
+    });
+  });
+
+  refreshIoSummary();
+}
+
+function isIoConfigurationVisible() {
+  return runtimeState.currentView === 'settings'
+    && activeSettingsTab === 'io'
+    && activeIoSubTab === 'configuration';
+}
+
+function canLoadIoConfiguration() {
+  return String(runtimeState.status || 'offline').toLowerCase() === 'online'
+    && !runtimeState.hornScanRunning
+    && !runtimeState.simulation
+    && Boolean(runtimeState.connections?.ethernet)
+    && typeof window.api?.dcx?.getIoConfiguration === 'function';
+}
+
+async function loadIoConfiguration({ force = false } = {}) {
+  if (ioConfigurationLoading || !canLoadIoConfiguration() || (!force && ioConfigurationLoaded)) {
+    return normalizeIoConfigurationState(runtimeState.ioConfiguration || {});
+  }
+
+  ioConfigurationLoading = true;
+
+  try {
+    const response = await window.api.dcx.getIoConfiguration();
+    if (!response?.success || !response?.config) {
+      return normalizeIoConfigurationState(runtimeState.ioConfiguration || {});
+    }
+
+    applyIoConfiguration(response.config);
+    ioConfigurationLoaded = true;
+    return normalizeIoConfigurationState(runtimeState.ioConfiguration || {});
+  } catch (error) {
+    log({ io_configuration_load_error: error.message });
+    return normalizeIoConfigurationState(runtimeState.ioConfiguration || {});
+  } finally {
+    ioConfigurationLoading = false;
+  }
+}
+
+function refreshIoConfigurationTab({ force = true } = {}) {
+  if (!isIoConfigurationVisible()) {
+    return;
+  }
+
+  loadIoConfiguration({ force }).catch((error) => {
+    log({ io_configuration_tab_error: error.message });
+  });
+}
+
+function collectIoConfigurationGroupValues(fields = []) {
+  return fields.reduce((nextConfiguration, field) => ({
+    ...nextConfiguration,
+    [`PIN${field.pin}`]: {
+      pin: `PIN${field.pin}`,
+      assignment: String($(field.selectId)?.value || field.defaultAssignment).trim() || field.defaultAssignment,
+      enabled: Boolean($(field.checkboxId)?.checked)
+    }
+  }), {});
+}
+
+function collectIoConfigurationFormValues() {
+  return {
+    digitalInputs: collectIoConfigurationGroupValues(IO_CONFIGURATION_FIELDS.digitalInputs),
+    digitalOutputs: collectIoConfigurationGroupValues(IO_CONFIGURATION_FIELDS.digitalOutputs),
+    analogInputs: collectIoConfigurationGroupValues(IO_CONFIGURATION_FIELDS.analogInputs),
+    analogOutputs: collectIoConfigurationGroupValues(IO_CONFIGURATION_FIELDS.analogOutputs),
+    lowselect: String(runtimeState.ioConfiguration?.lowselect ?? '0'),
+    systemType: String(runtimeState.ioConfiguration?.systemType ?? '1')
+  };
+}
+
+async function saveIoConfiguration() {
+  if (typeof window.api?.dcx?.setIoConfiguration !== 'function') {
+    showFooterFeedback('I/O configuration save is unavailable.', { tone: 'error', timeout: 8000 });
+    return;
+  }
+
+  try {
+    const response = await window.api.dcx.setIoConfiguration(collectIoConfigurationFormValues());
+    if (!response?.success) {
+      throw new Error(response?.error || response?.message || 'I/O configuration save failed');
+    }
+
+    applyIoConfiguration(response.config || runtimeState.ioConfiguration || {});
+    ioConfigurationLoaded = true;
+    showFooterFeedback('I/O configuration saved.', { tone: 'success', timeout: 4000 });
+  } catch (error) {
+    showFooterFeedback(`I/O configuration save failed: ${error.message}`, { tone: 'error', timeout: 8000 });
+  }
+}
+
+function cancelIoConfiguration() {
+  applyIoConfiguration(runtimeState.ioConfiguration || {}, { persist: false });
+  showFooterFeedback('I/O configuration changes canceled.', { tone: 'info', timeout: 3000 });
+}
+
+async function restoreIoConfigurationDefaults() {
+  if (typeof window.api?.dcx?.restoreIoConfigurationDefaults !== 'function') {
+    showFooterFeedback('I/O configuration restore is unavailable.', { tone: 'error', timeout: 8000 });
+    return;
+  }
+
+  try {
+    const response = await window.api.dcx.restoreIoConfigurationDefaults();
+    if (!response?.success) {
+      throw new Error(response?.error || response?.message || 'I/O configuration restore failed');
+    }
+
+    applyIoConfiguration(response.config || buildDefaultIoConfigurationState());
+    ioConfigurationLoaded = true;
+    showFooterFeedback('I/O configuration restored to defaults.', { tone: 'success', timeout: 5000 });
+  } catch (error) {
+    showFooterFeedback(`I/O configuration restore failed: ${error.message}`, { tone: 'error', timeout: 8000 });
   }
 }
 
@@ -607,7 +946,58 @@ function scalePercentToVoltage(value) {
     return null;
   }
 
-  return Math.max(0, Math.min(100, numericValue)) * 0.05;
+  return Math.max(0, Math.min(100, numericValue)) * 0.1;
+}
+
+function parseFrequencyValueHz(value) {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value;
+  }
+
+  const text = String(value || '').trim();
+  if (!text) {
+    return null;
+  }
+
+  const numericMatch = text.match(/-?\d+(?:\.\d+)?/);
+  if (!numericMatch) {
+    return null;
+  }
+
+  const numericValue = Number(numericMatch[0]);
+  if (!Number.isFinite(numericValue)) {
+    return null;
+  }
+
+  return /khz/i.test(text) ? numericValue * 1000 : numericValue;
+}
+
+function getOperatingFrequencyFamilyHz(telemetry = runtimeState.lastTelemetry || {}) {
+  const candidates = [
+    runtimeState.systemInfo?.frequency,
+    runtimeState.setupConfig?.digitaltune,
+    telemetry.frequency
+  ].map((value) => parseFrequencyValueHz(value)).filter((value) => Number.isFinite(value));
+
+  const referenceFrequency = candidates[0] ?? 40000;
+  return [20000, 30000, 40000].reduce((closest, candidate) => (
+    Math.abs(candidate - referenceFrequency) < Math.abs(closest - referenceFrequency)
+      ? candidate
+      : closest
+  ), 40000);
+}
+
+function scaleFrequencyToVoltage(value, telemetry = runtimeState.lastTelemetry || {}) {
+  const numericValue = Number(value);
+  if (!Number.isFinite(numericValue)) {
+    return null;
+  }
+
+  const operatingFrequencyHz = getOperatingFrequencyFamilyHz(telemetry);
+  const limits = FREQUENCY_OUTPUT_LIMITS_HZ[operatingFrequencyHz] || FREQUENCY_OUTPUT_LIMITS_HZ[40000];
+  const clampedValue = Math.max(limits.minimum, Math.min(limits.maximum, numericValue));
+
+  return ((clampedValue - limits.minimum) / (limits.maximum - limits.minimum)) * 10;
 }
 
 function formatIoVoltage(value) {
@@ -652,6 +1042,66 @@ function formatControllerIoVoltage(entry) {
   const absoluteValue = Math.abs(entry.numericValue);
   const nextVoltage = absoluteValue > 10 ? entry.numericValue / 1000 : entry.numericValue;
   return formatIoVoltage(nextVoltage);
+}
+
+function getAnalogOutputAssignment(selectId, defaultOutput = 'unassign') {
+  const selectedValue = String($(selectId)?.value || defaultOutput).trim();
+  return Object.prototype.hasOwnProperty.call(ANALOG_OUTPUT_LABELS, selectedValue)
+    ? selectedValue
+    : defaultOutput;
+}
+
+function getAnalogOutputVoltage(output, telemetry = runtimeState.lastTelemetry || {}) {
+  switch (output) {
+    case 'frequencyOut':
+      return scaleFrequencyToVoltage(telemetry.frequency, telemetry);
+    case 'powerOut':
+      return scalePercentToVoltage(telemetry.power);
+    case 'amplitudeOut':
+      return scalePercentToVoltage(telemetry.amplitude);
+    default:
+      return 0;
+  }
+}
+
+function refreshAnalogOutputLabel(labelId, output) {
+  const label = $(labelId);
+  if (!label) {
+    return;
+  }
+
+  const nextLabel = ANALOG_OUTPUT_LABELS[output] || ANALOG_OUTPUT_LABELS.unassign;
+  label.textContent = t(nextLabel.key, nextLabel.fallback);
+}
+
+function bindIoConfigurationControls() {
+  const buttonBindings = [
+    ['settings-io-config-save-btn', saveIoConfiguration],
+    ['settings-io-config-cancel-btn', cancelIoConfiguration],
+    ['settings-io-config-restore-defaults-btn', restoreIoConfigurationDefaults]
+  ];
+
+  buttonBindings.forEach(([id, handler]) => {
+    const element = $(id);
+    if (!element || element.dataset.bound === 'true') {
+      return;
+    }
+
+    element.dataset.bound = 'true';
+    element.addEventListener('click', handler);
+  });
+
+  ANALOG_OUTPUT_ASSIGNMENT_SELECT_IDS.forEach((id) => {
+    const element = $(id);
+    if (!element || element.dataset.bound === 'true') {
+      return;
+    }
+
+    element.dataset.bound = 'true';
+    element.addEventListener('change', () => {
+      refreshIoSummary();
+    });
+  });
 }
 
 function setIoIndicatorState(id, active) {
@@ -701,7 +1151,6 @@ function mergeIoSnapshotData(currentSnapshot = null, nextSnapshot = null) {
 }
 
 function refreshIoSummary({ telemetry = runtimeState.lastTelemetry || {}, ioSnapshot = lastIoSnapshot } = {}) {
-  const hasEthernetConnection = Boolean(runtimeState.connections?.ethernet);
   const resolvedTelemetry = getResolvedTelemetry(telemetry);
 
   IO_INPUT_INDICATORS.forEach(([pin, id]) => {
@@ -709,19 +1158,19 @@ function refreshIoSummary({ telemetry = runtimeState.lastTelemetry || {}, ioSnap
   });
 
   IO_OUTPUT_INDICATORS.forEach(([pin, id, telemetryField]) => {
-    const controllerState = getIoDigitalState(getIoEntry(ioSnapshot, pin));
-    const outputState = hasEthernetConnection ? controllerState : resolvedTelemetry[telemetryField];
-    setIoIndicatorState(id, outputState);
+    setIoIndicatorState(id, resolvedTelemetry[telemetryField]);
   });
 
   IO_ANALOG_INPUT_READINGS.forEach(([pin, id]) => {
     setIoReading(id, formatControllerIoVoltage(getIoEntry(ioSnapshot, pin)));
   });
 
-  IO_ANALOG_OUTPUT_READINGS.forEach(([pin, id, telemetryField]) => {
+  IO_ANALOG_OUTPUT_READINGS.forEach(({ pin, valueId, labelId, selectId, defaultOutput }) => {
+    const output = getAnalogOutputAssignment(selectId, defaultOutput);
     const controllerVoltage = formatControllerIoVoltage(getIoEntry(ioSnapshot, pin));
-    const fallbackVoltage = formatIoVoltage(scalePercentToVoltage(telemetry[telemetryField]));
-    setIoReading(id, controllerVoltage ?? fallbackVoltage, '00.00');
+    const fallbackVoltage = formatIoVoltage(getAnalogOutputVoltage(output, telemetry));
+    refreshAnalogOutputLabel(labelId, output);
+    setIoReading(valueId, controllerVoltage ?? fallbackVoltage, '00.00');
   });
 }
 
@@ -873,6 +1322,10 @@ function setActiveSettingsTab(tab) {
     refreshSystemInfoTab();
   }
 
+  if (activeSettingsTab === 'io' && activeIoSubTab === 'configuration') {
+    refreshIoConfigurationTab({ force: true });
+  }
+
   if (activeSettingsTab === 'signature' && isHornSignatureMode()) {
     refreshHornScanTabStatus();
   }
@@ -892,19 +1345,21 @@ function setActiveIoSubTab(tab) {
   });
 
   syncIoPollingState();
+
+  if (activeIoSubTab === 'configuration') {
+    refreshIoConfigurationTab({ force: true });
+  }
 }
 
 function syncRoutingControlDefaults() {
-  const hasEthernetConnection = Boolean(runtimeState.connections?.ethernet) && !runtimeState.simulation;
-
   ROUTING_FIELD_IDS.forEach((id) => {
     const select = $(id);
     if (!select) {
       return;
     }
 
-    select.disabled = !hasEthernetConnection;
-    select.value = hasEthernetConnection ? 'http' : 'mode';
+    select.disabled = true;
+    select.value = 'http';
   });
 }
 
@@ -1745,7 +2200,7 @@ function resetSignatureControls() {
 
 async function runSignatureAction(action) {
   try {
-    const res = await window.api?.dcx?.control?.({ action });
+    const res = await window.api?.dcx?.control?.({ action, options: { transport: 'ethernet' } });
     log({ signature_action: action, res });
 
     if (!res?.success) {
@@ -2141,33 +2596,18 @@ function refreshSignatureSummary(telemetry = runtimeState.lastTelemetry || {}) {
   }
 }
 
-function appendAlarmLogEntry(stateLabel, detail) {
-  const body = $('alarm-log-body');
+function appendAlarmLogEntry(active, detail) {
   const shell = $('alarm-log-table-shell');
-  if (!body) {
-    return;
-  }
-
-  if (alarmEventCount === 0) {
-    body.innerHTML = '';
-  }
-
-  const row = document.createElement('tr');
-  const timeCell = document.createElement('td');
-  const stateCell = document.createElement('td');
-  const detailCell = document.createElement('td');
-
-  timeCell.className = 'data-table-nowrap';
-  stateCell.className = 'font-semibold';
-  detailCell.className = 'text-muted-foreground';
-
-  timeCell.textContent = new Date().toLocaleTimeString();
-  stateCell.textContent = stateLabel;
-  detailCell.textContent = detail;
-
-  row.append(timeCell, stateCell, detailCell);
-  body.appendChild(row);
-  alarmEventCount += 1;
+  alarmHistory = [
+    ...alarmHistory,
+    {
+      timestamp: Date.now(),
+      active: Boolean(active),
+      detail
+    }
+  ].slice(-MAX_ALARM_HISTORY_ENTRIES);
+  renderAlarmLog();
+  persistAlarmHistory();
 
   if (shell) {
     shell.scrollTop = shell.scrollHeight;
@@ -2183,10 +2623,7 @@ function maybeRecordAlarmEvent(telemetry = runtimeState.lastTelemetry || {}) {
 
   previousAlarmState = nextAlarmState;
   const detail = `Frequency ${telemetry.frequency ?? '--'} Hz · Power ${telemetry.power ?? '--'} %`;
-  appendAlarmLogEntry(
-    nextAlarmState ? t('settings.alarms.active', 'ACTIVE') : t('settings.alarms.cleared', 'CLEAR'),
-    detail
-  );
+  appendAlarmLogEntry(nextAlarmState, detail);
 }
 
 function initializeSignatureChart() {
@@ -2404,10 +2841,14 @@ export function initializeSettingsPage() {
   initializeSignatureChart();
   bindSetupControls();
   bindTeensyFlashControls();
+  bindIoConfigurationControls();
   bindSignatureControls();
   setActiveSignatureMode(activeSignatureMode, { clearGraph: false });
+  renderAlarmLog();
+  void loadAlarmHistory();
   syncRoutingControlDefaults();
   applySetupConfiguration(runtimeState.setupConfig || {}, runtimeState.setupMetadata || {}, { persist: false });
+  applyIoConfiguration(runtimeState.ioConfiguration || {}, { persist: false });
   renderSystemInfo(runtimeState.systemInfo);
   hydrateTeensyFlashStatus();
   refreshIoSummary();
@@ -2431,15 +2872,22 @@ export function initializeSettingsPage() {
 
     if (canLoadSetupConfiguration()) {
       loadSetupConfiguration();
+    } else {
+      setupLoaded = false;
+    }
+
+    if (canLoadIoConfiguration() && isIoConfigurationVisible()) {
+      refreshIoConfigurationTab({ force: true });
       return;
     }
 
-    setupLoaded = false;
+    ioConfigurationLoaded = false;
   });
 
   document.addEventListener('app:view-changed', () => {
     syncIoPollingState();
     refreshSystemInfoTab();
+    refreshIoConfigurationTab({ force: true });
   });
 
   document.addEventListener('app:horn-scan-state', () => {
@@ -2462,15 +2910,19 @@ export function initializeSettingsPage() {
 
   document.addEventListener('app:system-info-updated', (event) => {
     renderSystemInfo(event.detail || runtimeState.systemInfo || {});
+    refreshIoSummary();
   });
 
   document.addEventListener('app:language-changed', () => {
     rebuildSignatureChart();
     setActiveSignatureMode(activeSignatureMode, { clearGraph: false });
     applySetupConfiguration(runtimeState.setupConfig || {}, runtimeState.setupMetadata || {}, { persist: false });
+    applyIoConfiguration(runtimeState.ioConfiguration || {}, { persist: false });
     renderSystemInfo(runtimeState.systemInfo);
     renderTeensyFlashStatus(teensyFlashStatus || {});
     renderHornScanStatusUi();
+    renderAlarmLog();
+    refreshIoSummary();
     refreshSignatureSummary(runtimeState.lastTelemetry);
     updateSignatureValueReadout();
   });
@@ -2479,5 +2931,9 @@ export function initializeSettingsPage() {
   loadSetupDefaults();
   if (canLoadSetupConfiguration()) {
     loadSetupConfiguration({ force: true });
+  }
+
+  if (canLoadIoConfiguration() && isIoConfigurationVisible()) {
+    refreshIoConfigurationTab({ force: true });
   }
 }

@@ -1,6 +1,7 @@
 #include <Adafruit_ADS1X15.h>
 #include <Adafruit_MCP4728.h>
 #include <Wire.h>
+#include <math.h>
 
 namespace Pins {
 const uint8_t GENERAL_ALARM = 0;
@@ -21,27 +22,58 @@ const uint8_t SONICS_ACTIVE_LED_1 = 39;
 const uint8_t PROGRAM_OPTO = 40;
 }
 
-const uint32_t SERIAL_BAUD_RATE = 115200;
-const uint32_t TELEMETRY_INTERVAL_MS = 100;
-const uint16_t DEFAULT_PULSE_MS = 200;
-const uint16_t PROGRAM_PULSE_MS = 600;
-const uint16_t DAC_MAX = 4095;
-const uint16_t ADS_MAX_COUNTS = 2047;
-const float ADC_REFERENCE_VOLTS = 4.096f;
-const int32_t DEFAULT_FREQUENCY_HZ = 40000;
-const int32_t MIN_FREQUENCY_HZ = 39000;
-const int32_t MAX_FREQUENCY_HZ = 41000;
+constexpr uint32_t SERIAL_BAUD_RATE = 115200;
+constexpr uint32_t TELEMETRY_INTERVAL_MS = 100;
+constexpr uint16_t DEFAULT_PULSE_MS = 200;
+constexpr uint16_t PROGRAM_PULSE_MS = 600;
+constexpr uint16_t DAC_MAX = 4095;
+constexpr adsGain_t ADS_INPUT_GAIN = GAIN_ONE;
+constexpr uint8_t ANALOG_INPUT_CHANNEL_COUNT = 4;
+constexpr uint8_t FREQUENCY_INPUT_CHANNEL = 1;
+constexpr uint8_t AMPLITUDE_INPUT_CHANNEL = 0;
+constexpr float ANALOG_INPUT_MILLIVOLTS_PER_VOLT = 1000.0f;
+constexpr float MAX_ANALOG_INPUT_STORAGE_VOLTS = 32.767f;
+constexpr float DCX_ANALOG_OUTPUT_MIN_VOLTS = 0.0f;
+constexpr float DCX_ANALOG_OUTPUT_MAX_VOLTS = 10.0f;
+constexpr float ANALOG_INPUT_DIVIDER_TOP_OHMS = 33000.0f;
+constexpr float ANALOG_INPUT_DIVIDER_BOTTOM_OHMS = 10000.0f;
+constexpr float ANALOG_INPUT_DIVIDER_GAIN = (ANALOG_INPUT_DIVIDER_TOP_OHMS + ANALOG_INPUT_DIVIDER_BOTTOM_OHMS) / ANALOG_INPUT_DIVIDER_BOTTOM_OHMS;
+constexpr float FREQUENCY_OUTPUT_MIN_HZ = 38900.0f;
+constexpr float FREQUENCY_OUTPUT_MAX_HZ = 40900.0f;
+constexpr float AMPLITUDE_OUTPUT_MIN_PERCENT = 0.0f;
+constexpr float AMPLITUDE_OUTPUT_MAX_PERCENT = 100.0f;
+constexpr float FREQUENCY_INPUT_SCALE = 1.0f;
+constexpr float FREQUENCY_INPUT_OFFSET_VOLTS = 0.0f;
+constexpr float AMPLITUDE_INPUT_SCALE = 1.0f;
+constexpr float AMPLITUDE_INPUT_OFFSET_VOLTS = 0.0f;
+constexpr bool ADC_DEBUG_STREAM_ENABLED_BY_DEFAULT = false;
+constexpr int32_t DEFAULT_FREQUENCY_HZ = 40000;
 
 Adafruit_MCP4728 dac;
 Adafruit_ADS1015 ads;
 
+struct AnalogInputCalibration {
+  bool compensateDivider;
+  float scale;
+  float offsetVolts;
+};
+
+struct AnalogInputSample {
+  int16_t counts;
+  float adsVolts;
+  float inputVolts;
+  int16_t inputMillivolts;
+};
+
 bool dacReady = false;
 bool adcReady = false;
+bool adcDebugStreamEnabled = ADC_DEBUG_STREAM_ENABLED_BY_DEFAULT;
 uint32_t lastTelemetryAt = 0;
 uint32_t lastCycleUpdateAt = 0;
 uint32_t cycles = 0;
 uint16_t dacValues[4] = {0, 2048, 0, 0};
-int16_t analogInputsMillivolts[4] = {0, 0, 0, 0};
+int16_t analogInputsMillivolts[ANALOG_INPUT_CHANNEL_COUNT] = {0, 0, 0, 0};
+AnalogInputSample analogInputSamples[ANALOG_INPUT_CHANNEL_COUNT] = {};
 int16_t frequencyOffsetPercent = 0;
 uint8_t amplitudePercent = 0;
 String serialBuffer;
@@ -58,6 +90,15 @@ TimedPulse timedPulses[] = {
   { Pins::EXT_CLEAR, 0, false },
   { Pins::MEMORY_CLEAR, 0, false },
   { Pins::PROGRAM_OPTO, 0, false }
+};
+
+// Per-channel field calibration hooks. Keep divider compensation separate from
+// scale/offset so service technicians can trim channels without changing wiring math.
+constexpr AnalogInputCalibration ANALOG_INPUT_CALIBRATIONS[ANALOG_INPUT_CHANNEL_COUNT] = {
+  { true, AMPLITUDE_INPUT_SCALE, AMPLITUDE_INPUT_OFFSET_VOLTS },
+  { true, FREQUENCY_INPUT_SCALE, FREQUENCY_INPUT_OFFSET_VOLTS },
+  { false, 1.0f, 0.0f },
+  { false, 1.0f, 0.0f }
 };
 
 bool isTruthy(const String &value) {
@@ -78,6 +119,76 @@ int32_t clampInt32(int32_t value, int32_t minimum, int32_t maximum) {
 
 uint16_t clampDacValue(int32_t value) {
   return static_cast<uint16_t>(clampInt32(value, 0, DAC_MAX));
+}
+
+float clampFloat(float value, float minimum, float maximum) {
+  if (value < minimum) {
+    return minimum;
+  }
+
+  if (value > maximum) {
+    return maximum;
+  }
+
+  return value;
+}
+
+float interpolateLinear(float inputValue, float inputMinimum, float inputMaximum, float outputMinimum, float outputMaximum) {
+  if (inputMaximum <= inputMinimum) {
+    return outputMinimum;
+  }
+
+  const float normalized = clampFloat(
+    (inputValue - inputMinimum) / (inputMaximum - inputMinimum),
+    0.0f,
+    1.0f
+  );
+
+  return outputMinimum + (normalized * (outputMaximum - outputMinimum));
+}
+
+int16_t voltsToMillivolts(float volts) {
+  return static_cast<int16_t>(lroundf(clampFloat(volts, 0.0f, MAX_ANALOG_INPUT_STORAGE_VOLTS) * ANALOG_INPUT_MILLIVOLTS_PER_VOLT));
+}
+
+float millivoltsToVolts(int16_t millivolts) {
+  return static_cast<float>(millivolts) / ANALOG_INPUT_MILLIVOLTS_PER_VOLT;
+}
+
+float applyAnalogInputCalibration(uint8_t channel, float volts) {
+  if (channel >= ANALOG_INPUT_CHANNEL_COUNT) {
+    return volts;
+  }
+
+  const AnalogInputCalibration &calibration = ANALOG_INPUT_CALIBRATIONS[channel];
+  return (volts * calibration.scale) + calibration.offsetVolts;
+}
+
+AnalogInputSample sampleAdsChannel(uint8_t channel, bool compensateDivider) {
+  AnalogInputSample sample = { 0, 0.0f, 0.0f, 0 };
+
+  if (!adcReady || channel >= ANALOG_INPUT_CHANNEL_COUNT) {
+    return sample;
+  }
+
+  sample.counts = ads.readADC_SingleEnded(channel);
+
+  // Never derive volts from a hardcoded LSB such as 0.003f. ADS1015 resolution
+  // depends on the configured PGA gain, so computeVolts() must be used.
+  sample.adsVolts = ads.computeVolts(sample.counts);
+
+  float inputVolts = sample.adsVolts;
+  if (compensateDivider) {
+    inputVolts *= ANALOG_INPUT_DIVIDER_GAIN;
+  }
+
+  sample.inputVolts = applyAnalogInputCalibration(channel, inputVolts);
+  if (sample.inputVolts < 0.0f) {
+    sample.inputVolts = 0.0f;
+  }
+
+  sample.inputMillivolts = voltsToMillivolts(sample.inputVolts);
+  return sample;
 }
 
 bool readInput(uint8_t pin) {
@@ -126,13 +237,27 @@ void setDacChannelValue(uint8_t channel, uint16_t value) {
 
 void setAmplitudePercent(uint8_t percent) {
   amplitudePercent = static_cast<uint8_t>(clampInt32(percent, 0, 100));
-  setDacChannelValue(0, map(amplitudePercent, 0, 100, 0, DAC_MAX));
+  const float normalized =
+    clampFloat(static_cast<float>(amplitudePercent) / 100.0f, 0.0f, 1.0f);
+
+  setDacChannelValue(
+    0,
+    static_cast<uint16_t>(lroundf(normalized * DAC_MAX))
+  );
 }
 
 void setFrequencyOffsetPercent(int16_t percent) {
   frequencyOffsetPercent = static_cast<int16_t>(clampInt32(percent, -100, 100));
-  const int32_t scaled = map(frequencyOffsetPercent, -100, 100, 0, DAC_MAX);
-  setDacChannelValue(1, clampDacValue(scaled));
+  const float normalized = clampFloat(
+    (static_cast<float>(frequencyOffsetPercent) + 100.0f) / 200.0f,
+    0.0f,
+    1.0f
+  );
+
+  const uint16_t scaled =
+    static_cast<uint16_t>(lroundf(normalized * DAC_MAX));
+
+  setDacChannelValue(1, scaled);
 }
 
 void pulsePin(uint8_t pin, uint16_t durationMs) {
@@ -203,30 +328,50 @@ void resetFactoryState() {
 }
 
 int16_t readAdsMillivolts(uint8_t channel) {
-  if (!adcReady) {
-    return 0;
-  }
+  return voltsToMillivolts(sampleAdsChannel(channel, false).adsVolts);
+}
 
-  const int16_t counts = ads.readADC_SingleEnded(channel);
-  const float volts = ads.computeVolts(counts);
-  return static_cast<int16_t>(volts * 1000.0f);
+int16_t readAdsInputMillivolts(uint8_t channel, bool compensateDivider = false) {
+  return sampleAdsChannel(channel, compensateDivider).inputMillivolts;
 }
 
 void sampleAnalogInputs() {
-  analogInputsMillivolts[0] = readAdsMillivolts(0);
-  analogInputsMillivolts[1] = readAdsMillivolts(1);
-  analogInputsMillivolts[2] = readAdsMillivolts(2);
-  analogInputsMillivolts[3] = readAdsMillivolts(3);
+  for (uint8_t channel = 0; channel < ANALOG_INPUT_CHANNEL_COUNT; channel++) {
+    analogInputSamples[channel] = sampleAdsChannel(channel, ANALOG_INPUT_CALIBRATIONS[channel].compensateDivider);
+    analogInputsMillivolts[channel] = analogInputSamples[channel].inputMillivolts;
+  }
 }
 
-int32_t deriveFrequencyHz() {
-  const int32_t millivolts = clampInt32(analogInputsMillivolts[0], 0, static_cast<int32_t>(ADC_REFERENCE_VOLTS * 1000.0f));
-  return map(millivolts, 0, static_cast<int32_t>(ADC_REFERENCE_VOLTS * 1000.0f), MIN_FREQUENCY_HZ, MAX_FREQUENCY_HZ);
+float deriveFrequencyHz() {
+  const float inputVolts = clampFloat(
+    millivoltsToVolts(analogInputsMillivolts[FREQUENCY_INPUT_CHANNEL]),
+    DCX_ANALOG_OUTPUT_MIN_VOLTS,
+    DCX_ANALOG_OUTPUT_MAX_VOLTS
+  );
+
+  return interpolateLinear(
+    inputVolts,
+    DCX_ANALOG_OUTPUT_MIN_VOLTS,
+    DCX_ANALOG_OUTPUT_MAX_VOLTS,
+    FREQUENCY_OUTPUT_MIN_HZ,
+    FREQUENCY_OUTPUT_MAX_HZ
+  );
 }
 
-int32_t deriveAmplitudePercent() {
-  const int32_t millivolts = clampInt32(analogInputsMillivolts[1], 0, static_cast<int32_t>(ADC_REFERENCE_VOLTS * 1000.0f));
-  return map(millivolts, 0, static_cast<int32_t>(ADC_REFERENCE_VOLTS * 1000.0f), 0, 100);
+float deriveAmplitudePercent() {
+  const float inputVolts = clampFloat(
+    millivoltsToVolts(analogInputsMillivolts[AMPLITUDE_INPUT_CHANNEL]),
+    DCX_ANALOG_OUTPUT_MIN_VOLTS,
+    DCX_ANALOG_OUTPUT_MAX_VOLTS
+  );
+
+  return interpolateLinear(
+    inputVolts,
+    DCX_ANALOG_OUTPUT_MIN_VOLTS,
+    DCX_ANALOG_OUTPUT_MAX_VOLTS,
+    AMPLITUDE_OUTPUT_MIN_PERCENT,
+    AMPLITUDE_OUTPUT_MAX_PERCENT
+  );
 }
 
 void updateCycleEstimate() {
@@ -239,17 +384,23 @@ void updateCycleEstimate() {
     return;
   }
 
-  const uint32_t frequencyHz = static_cast<uint32_t>(max<int32_t>(deriveFrequencyHz(), DEFAULT_FREQUENCY_HZ));
-  cycles += static_cast<uint32_t>((frequencyHz * elapsedMs) / 1000UL);
+  const float derivedFrequencyHz = deriveFrequencyHz();
+  const float effectiveFrequencyHz = derivedFrequencyHz > static_cast<float>(DEFAULT_FREQUENCY_HZ)
+    ? derivedFrequencyHz
+    : static_cast<float>(DEFAULT_FREQUENCY_HZ);
+  cycles += static_cast<uint32_t>(lroundf((effectiveFrequencyHz * static_cast<float>(elapsedMs)) / 1000.0f));
 }
 
 void emitTelemetry() {
   sampleAnalogInputs();
+  if (adcDebugStreamEnabled) {
+    printAnalogInputDebug();
+  }
   updateCycleEstimate();
   updateStatusLeds();
 
-  const int32_t frequencyHz = deriveFrequencyHz();
-  const int32_t liveAmplitudePercent = deriveAmplitudePercent();
+  const int32_t frequencyHz = static_cast<int32_t>(lroundf(deriveFrequencyHz()));
+  const int32_t liveAmplitudePercent = static_cast<int32_t>(lroundf(deriveAmplitudePercent()));
 
   Serial.print(frequencyHz);
   Serial.print('A');
@@ -275,6 +426,36 @@ void emitTelemetry() {
   Serial.println('K');
 }
 
+void printAnalogInputDebug() {
+  const AnalogInputSample &frequencyChannel =
+    analogInputSamples[FREQUENCY_INPUT_CHANNEL];
+
+  const AnalogInputSample &amplitudeChannel =
+    analogInputSamples[AMPLITUDE_INPUT_CHANNEL];
+
+  writeStatusMessage(
+    String(F("ADC_DEBUG "))
+
+    + F("FREQ_CH=") + String(FREQUENCY_INPUT_CHANNEL)
+
+    + F(" FREQ_COUNTS=") + frequencyChannel.counts
+    + F(" FREQ_RAW_MV=") + voltsToMillivolts(frequencyChannel.adsVolts)
+    + F(" FREQ_ADS_V=") + String(frequencyChannel.adsVolts, 4)
+    + F(" FREQ_INPUT_MV=") + frequencyChannel.inputMillivolts
+    + F(" FREQ_INPUT_V=") + String(frequencyChannel.inputVolts, 4)
+    + F(" FREQ_HZ=") + String(deriveFrequencyHz(), 1)
+
+    + F(" AMP_CH=") + String(AMPLITUDE_INPUT_CHANNEL)
+
+    + F(" AMP_COUNTS=") + amplitudeChannel.counts
+    + F(" AMP_RAW_MV=") + voltsToMillivolts(amplitudeChannel.adsVolts)
+    + F(" AMP_ADS_V=") + String(amplitudeChannel.adsVolts, 4)
+    + F(" AMP_INPUT_MV=") + amplitudeChannel.inputMillivolts
+    + F(" AMP_INPUT_V=") + String(amplitudeChannel.inputVolts, 4)
+    + F(" AMP_PCT=") + String(deriveAmplitudePercent(), 2)
+  );
+}
+
 int32_t parseNumber(const String &text, int32_t fallback = 0) {
   if (text.length() == 0) {
     return fallback;
@@ -284,7 +465,7 @@ int32_t parseNumber(const String &text, int32_t fallback = 0) {
 }
 
 void printHelp() {
-  writeStatusMessage(F("Commands: START [0-100], STOP, SEEK, RESET, CLEAR, MEMORY_CLEAR, SET_AMP <0-100>, SET_FREQ_OFFSET <-100..100>, SET_AMPLITUDE_SOURCE <INTERNAL|EXTERNAL>, SET_DAC <A|B|C|D> <0-4095>, PROGRAM, STATUS, FACTORY_RESET, HELP, PING"));
+  writeStatusMessage(F("Commands: START [0-100], STOP, SEEK, RESET, CLEAR, MEMORY_CLEAR, SET_AMP <0-100>, SET_FREQ_OFFSET <-100..100>, SET_AMPLITUDE_SOURCE <INTERNAL|EXTERNAL>, SET_DAC <A|B|C|D> <0-4095>, PROGRAM, STATUS, ADC_DEBUG [ON|OFF], FACTORY_RESET, HELP, PING"));
 }
 
 void processCommand(String line) {
@@ -296,9 +477,12 @@ void processCommand(String line) {
   const int separatorIndex = line.indexOf(' ');
   String command = separatorIndex >= 0 ? line.substring(0, separatorIndex) : line;
   String arguments = separatorIndex >= 0 ? line.substring(separatorIndex + 1) : "";
+  String normalizedArguments = arguments;
   command.trim();
   arguments.trim();
   command.toUpperCase();
+  normalizedArguments.trim();
+  normalizedArguments.toUpperCase();
 
   if (command == "PING") {
     Serial.println(F("PONG"));
@@ -312,6 +496,24 @@ void processCommand(String line) {
 
   if (command == "STATUS") {
     emitTelemetry();
+    return;
+  }
+
+  if (command == "ADC_DEBUG") {
+    if (normalizedArguments == "ON") {
+      adcDebugStreamEnabled = true;
+      writeStatusMessage(F("OK ADC_DEBUG ON"));
+      return;
+    }
+
+    if (normalizedArguments == "OFF") {
+      adcDebugStreamEnabled = false;
+      writeStatusMessage(F("OK ADC_DEBUG OFF"));
+      return;
+    }
+
+    sampleAnalogInputs();
+    printAnalogInputDebug();
     return;
   }
 
@@ -469,7 +671,12 @@ void setupDevices() {
 
   adcReady = ads.begin(ADS1X15_ADDRESS, &Wire);
   if (adcReady) {
-    ads.setGain(GAIN_ONE);
+    // GAIN_ONE selects a +/-4.096 V full-scale range. With the 33k/10k divider,
+    // the maximum 10 V DCX output is about 2.326 V at the ADS input, so this
+    // setting keeps comfortable headroom while preserving good resolution.
+    // computeVolts() must use this configured PGA range; fixed factors like
+    // 0.003f are incorrect because ADS1015 LSB size changes with gain.
+    ads.setGain(ADS_INPUT_GAIN);
     ads.setDataRate(RATE_ADS1015_1600SPS);
   }
 

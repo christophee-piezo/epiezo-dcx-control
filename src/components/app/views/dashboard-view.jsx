@@ -2,8 +2,8 @@ import { Pause, Play, Trash2 } from 'lucide-react';
 
 import { Button } from '../../ui/button.jsx';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../../ui/card.jsx';
+import { CheckboxSelect } from '../../ui/checkbox-select.jsx';
 import { Input } from '../../ui/input.jsx';
-import { NativeSelect } from '../../ui/native-select.jsx';
 import { FormField } from '../form-field.jsx';
 import { TelemetryRow } from '../telemetry-row.jsx';
 
@@ -13,11 +13,20 @@ const liveIndicators = [
   { id: 'led-alarm', label: 'Alarm', key: 'dashboard.indicators.alarm' },
   { id: 'led-seek', label: 'Seeking', key: 'dashboard.indicators.seeking' }
 ];
+const telemetryAxisOptions = [
+  { value: 'amplitude', label: 'Amplitude', labelKey: 'chart.axis.amplitude' },
+  { value: 'frequency', label: 'Frequency', labelKey: 'chart.axis.frequency' },
+  { value: 'power', label: 'Power', labelKey: 'chart.axis.power' },
+  { value: 'cycles', label: 'Cycles', labelKey: 'chart.axis.cycles' },
+  { value: 'time', label: 'Time', labelKey: 'chart.axis.time' },
+  { value: 'aux1', label: 'Aux 1', labelKey: 'chart.axis.aux1' },
+  { value: 'aux2', label: 'Aux 2', labelKey: 'chart.axis.aux2' }
+];
 
 export function DashboardView() {
   return (
     <main className="content active px-3 py-3 lg:px-4 lg:py-4" id="dashboard">
-      <div className="grid min-h-0 flex-1 gap-4 lg:grid-cols-[320px_minmax(0,1fr)]">
+      <div className="grid min-h-0 flex-1 gap-4 xl:grid-cols-[minmax(18rem,20rem)_minmax(0,1fr)]">
         <div className="flex min-h-0 min-w-0 flex-col gap-4">
           <Card className="flex min-h-0 flex-col">
             <CardHeader>
@@ -74,69 +83,71 @@ export function DashboardView() {
           </Card>
         </div>
 
-        <Card className="flex min-h-0 min-w-0 flex-col">
-          <CardHeader className="flex-col items-start justify-between gap-3 space-y-0 sm:flex-row sm:items-center">
-            <div>
+          <Card className="flex min-h-0 min-w-0 flex-col">
+            <CardHeader className="space-y-4">
               <CardTitle data-i18n="dashboard.graph.title">Telemetry Graph</CardTitle>
-              <CardDescription data-i18n="dashboard.graph.description">Plots live telemetry whenever the controller is online, including idle periods.</CardDescription>
-            </div>
-            <div className="grid w-full gap-2 sm:w-auto sm:grid-cols-[minmax(0,140px)_minmax(0,140px)_auto] sm:items-end">
-              <FormField label="X-Axis" labelKey="dashboard.graph.xAxis">
-                <NativeSelect defaultValue="time" id="chart-x-axis">
-                  <option data-i18n="chart.axis.amplitude" value="amplitude">Amplitude</option>
-                  <option data-i18n="chart.axis.frequency" value="frequency">Frequency</option>
-                  <option data-i18n="chart.axis.power" value="power">Power</option>
-                  <option data-i18n="chart.axis.cycles" value="cycles">Cycles</option>
-                  <option data-i18n="chart.axis.time" value="time">Time</option>
-                  <option data-i18n="chart.axis.aux1" value="aux1">Aux 1</option>
-                  <option data-i18n="chart.axis.aux2" value="aux2">Aux 2</option>
-                </NativeSelect>
-              </FormField>
-              <FormField label="Y-Axis" labelKey="dashboard.graph.yAxis">
-                <NativeSelect defaultValue="frequency" id="chart-y-axis">
-                  <option data-i18n="chart.axis.frequency" value="frequency">Frequency</option>
-                  <option data-i18n="chart.axis.amplitude" value="amplitude">Amplitude</option>
-                  <option data-i18n="chart.axis.power" value="power">Power</option>
-                  <option data-i18n="chart.axis.cycles" value="cycles">Cycles</option>
-                  <option data-i18n="chart.axis.time" value="time">Time</option>
-                  <option data-i18n="chart.axis.aux1" value="aux1">Aux 1</option>
-                  <option data-i18n="chart.axis.aux2" value="aux2">Aux 2</option>
-                </NativeSelect>
-              </FormField>
-              <div className="grid grid-cols-3 gap-2 sm:flex sm:w-auto sm:flex-nowrap">
-                <Button
-                  aria-label="Play telemetry"
-                  className="w-full border-emerald-500/40 bg-emerald-500/12 text-emerald-300 hover:bg-emerald-500/20 hover:text-emerald-200 sm:w-auto"
-                  id="play-chart-btn"
-                  size="icon"
-                  title="Play telemetry"
-                  variant="outline"
-                >
-                  <Play className="size-4" />
-                </Button>
-                <Button
-                  aria-label="Pause telemetry"
-                  className="w-full border-amber-500/40 bg-amber-500/12 text-amber-300 hover:bg-amber-500/20 hover:text-amber-200 sm:w-auto"
-                  id="pause-chart-btn"
-                  size="icon"
-                  title="Pause telemetry"
-                  variant="outline"
-                >
-                  <Pause className="size-4" />
-                </Button>
-                <Button
-                  aria-label="Clear telemetry"
-                  className="w-full border-red-500/40 bg-red-500/12 text-red-300 hover:bg-red-500/20 hover:text-red-200 sm:w-auto"
-                  id="clear-chart-btn"
-                  size="icon"
-                  title="Clear telemetry"
-                  variant="outline"
-                >
-                  <Trash2 className="size-4" />
-                </Button>
+              <div className="overflow-visible pb-1">
+                <div className="flex min-w-max items-end gap-3 overflow-visible">
+                  <FormField label="X-Axis" labelKey="dashboard.graph.xAxis">
+                    <CheckboxSelect
+                      buttonClassName="w-[10rem]"
+                      defaultValue="time"
+                      id="chart-x-axis"
+                      menuLabel="X-Axis"
+                      menuLabelKey="dashboard.graph.xAxis"
+                      options={telemetryAxisOptions}
+                    />
+                  </FormField>
+                  <FormField label="Y-Axis" labelKey="dashboard.graph.yAxis">
+                    <CheckboxSelect
+                      buttonClassName="w-[10rem]"
+                      defaultValues={['frequency']}
+                      id="chart-y-axis"
+                      menuLabel="Y-Axis"
+                      menuLabelKey="dashboard.graph.yAxis"
+                      multiple
+                      options={telemetryAxisOptions}
+                    />
+                  </FormField>
+
+                  <div className="ml-auto flex items-center gap-2 overflow-visible">
+                    <Button
+                      aria-label="Play telemetry"
+                      className="border-emerald-500/40 bg-emerald-500/12 text-emerald-300 hover:bg-emerald-500/20 hover:text-emerald-200"
+                      id="play-chart-btn"
+                      size="icon"
+                      title="Play telemetry"
+                      variant="outline"
+                    >
+                      <Play className="size-4" />
+                    </Button>
+                    <Button
+                      aria-label="Pause telemetry"
+                      className="border-amber-500/40 bg-amber-500/12 text-amber-300 hover:bg-amber-500/20 hover:text-amber-200"
+                      id="pause-chart-btn"
+                      size="icon"
+                      title="Pause telemetry"
+                      variant="outline"
+                    >
+                      <Pause className="size-4" />
+                    </Button>
+                    <Button
+                      aria-label="Clear telemetry"
+                      className="border-red-500/40 bg-red-500/12 text-red-300 hover:bg-red-500/20 hover:text-red-200"
+                      id="clear-chart-btn"
+                      size="icon"
+                      title="Clear telemetry"
+                      variant="outline"
+                    >
+                      <Trash2 className="size-4" />
+                    </Button>
+                    <Button className="min-w-[8rem] sm:min-w-[10rem]" data-i18n="dashboard.graph.export" id="export-dashboard-data-btn" size="sm" variant="outline">
+                      Export Data
+                    </Button>
+                  </div>
+                </div>
               </div>
-            </div>
-          </CardHeader>
+            </CardHeader>
           <CardContent className="flex min-h-0 flex-1 flex-col">
             <div id="telemetry-chart-container">
               <canvas className="h-full w-full" id="telemetry-chart" />

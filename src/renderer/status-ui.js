@@ -9,13 +9,6 @@ const FOOTER_TONE_CLASSES = {
   warning: ['text-amber-300'],
   error: ['text-red-400']
 };
-const STATUS_SIGNAL_PINS = {
-  ready: 'PIN14',
-  active: 'PIN15',
-  alarm: 'PIN0',
-  seek: 'PIN1'
-};
-
 function getDefaultFooterMessage() {
   const indicatorState = runtimeState.connectionIndicatorState || 'offline';
 
@@ -206,47 +199,18 @@ export function refreshStatusUi() {
   });
 }
 
-function getIoDigitalState(entry) {
-  if (!entry) {
-    return null;
-  }
-
-  const rawValue = String(entry.rawValue ?? '').trim().toUpperCase();
-  if (['1', 'ON', 'TRUE', 'READY', 'ACTIVE', 'HIGH'].includes(rawValue)) {
-    return true;
-  }
-
-  if (['0', 'OFF', 'FALSE', 'IDLE', 'INACTIVE', 'LOW'].includes(rawValue)) {
-    return false;
-  }
-
-  if (entry.numericValue == null) {
-    return null;
-  }
-
-  return Boolean(entry.numericValue);
-}
-
-function resolveIndicatorState(pin, telemetryValue) {
-  if (!runtimeState.connections?.teensy && runtimeState.connections?.ethernet) {
-    const ioEntry = runtimeState.ioSnapshot?.entries?.[pin] || null;
-    const ioState = getIoDigitalState(ioEntry);
-    if (ioState != null) {
-      return ioState;
-    }
-  }
-
+function resolveIndicatorState(telemetryValue) {
   return Boolean(telemetryValue);
 }
 
 export function getResolvedTelemetry(telemetry = {}) {
   const nextTelemetry = {
-    ...telemetry
+    ...telemetry,
+    ready: resolveIndicatorState(telemetry.ready) ? 1 : 0,
+    active: resolveIndicatorState(telemetry.active) ? 1 : 0,
+    alarm: resolveIndicatorState(telemetry.alarm) ? 1 : 0,
+    seek: resolveIndicatorState(telemetry.seek) ? 1 : 0
   };
-
-  Object.entries(STATUS_SIGNAL_PINS).forEach(([field, pin]) => {
-    nextTelemetry[field] = resolveIndicatorState(pin, telemetry[field]) ? 1 : 0;
-  });
 
   return nextTelemetry;
 }
@@ -344,10 +308,10 @@ export function updateTelemetry(telemetry = {}) {
   const active = $('led-active');
   const seek = $('led-seek');
   const alarm = $('led-alarm');
-  const readyState = resolveIndicatorState('PIN14', nextTelemetry.ready);
-  const activeState = resolveIndicatorState('PIN15', nextTelemetry.active);
-  const seekState = resolveIndicatorState('PIN1', nextTelemetry.seek);
-  const alarmState = resolveIndicatorState('PIN0', nextTelemetry.alarm);
+  const readyState = resolveIndicatorState(nextTelemetry.ready);
+  const activeState = resolveIndicatorState(nextTelemetry.active);
+  const seekState = resolveIndicatorState(nextTelemetry.seek);
+  const alarmState = resolveIndicatorState(nextTelemetry.alarm);
 
   if (ready) ready.classList.toggle('active', readyState);
   if (active) active.classList.toggle('active', activeState);

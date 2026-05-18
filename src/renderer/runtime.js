@@ -29,6 +29,7 @@ export const runtimeState = {
   themeMode: 'dark',
   lastTelemetry: {},
   ioSnapshot: null,
+  ioConfiguration: {},
   setupConfig: {},
   setupMetadata: {},
   setupDefaults: {},

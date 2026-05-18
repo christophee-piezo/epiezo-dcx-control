@@ -5,11 +5,14 @@ import { refreshSequencePreviewChart } from './sequence-preview-chart.js';
 import { renderTimeline } from './timeline-ui.js';
 
 const STORE_KEY = 'saved-sequences';
+const DRAFT_STORE_KEY = 'sequence-editor-draft';
+const DRAFT_PERSIST_DELAY_MS = 200;
 
 let savedSequences = [];
 let activeSequenceId = null;
 let saveState = 'draft';
 let saveStateMessageKey = 'sequencer.saveState.draft';
+let sequenceDraftPersistTimer = null;
 
 function navigateToMethodView() {
   document.dispatchEvent(new CustomEvent('app:navigate', { detail: { tab: 'sequencer' } }));
@@ -131,8 +134,100 @@ function normalizeSavedSequences(value) {
     .sort((a, b) => b.updatedAt - a.updatedAt);
 }
 
+function normalizeSequenceDraft(value) {
+  if (!value || typeof value !== 'object') {
+    return null;
+  }
+
+  const fallbackRamp = Math.max(0, Number(value.options?.globalRamp) || 50);
+  const normalizedTimeline = normalizeSequenceTimeline(value.timeline, fallbackRamp);
+  const normalizedSaveState = ['draft', 'dirty'].includes(value.saveState) ? value.saveState : 'draft';
+  const normalizedMessageKey = typeof value.saveStateMessageKey === 'string' && value.saveStateMessageKey.trim()
+    ? value.saveStateMessageKey.trim()
+    : getDefaultSaveStateMessageKey(normalizedSaveState);
+
+  return {
+    activeSequenceId: typeof value.activeSequenceId === 'string' && value.activeSequenceId.trim()
+      ? value.activeSequenceId.trim()
+      : null,
+    name: typeof value.name === 'string' ? value.name : '',
+    timeline: normalizedTimeline,
+    options: {
+      loopCount: String(value.options?.loopCount || '1'),
+      autoAbort: value.options?.autoAbort === 'NEVER' ? 'NEVER' : 'ALARM',
+      flashBeforeRun: Boolean(value.options?.flashBeforeRun)
+    },
+    saveState: normalizedSaveState,
+    saveStateMessageKey: normalizedMessageKey
+  };
+}
+
 async function persistSavedSequences() {
   await window.api.store.set(STORE_KEY, savedSequences);
+}
+
+function clearSequenceDraftPersistence() {
+  if (sequenceDraftPersistTimer) {
+    window.clearTimeout(sequenceDraftPersistTimer);
+    sequenceDraftPersistTimer = null;
+  }
+
+  const persistResult = window.api?.store?.set?.(DRAFT_STORE_KEY, null);
+  if (persistResult && typeof persistResult.catch === 'function') {
+    persistResult.catch(() => {});
+  }
+}
+
+function buildEditorSequenceDraft() {
+  return normalizeSequenceDraft({
+    activeSequenceId: getSequenceById(activeSequenceId)?.id || null,
+    name: $('seq-name')?.value || '',
+    timeline: getTimelineSnapshot(),
+    options: readSequenceOptionsFromUi(),
+    saveState,
+    saveStateMessageKey
+  });
+}
+
+function scheduleSequenceDraftPersistence() {
+  if (sequenceDraftPersistTimer) {
+    window.clearTimeout(sequenceDraftPersistTimer);
+  }
+
+  sequenceDraftPersistTimer = window.setTimeout(() => {
+    sequenceDraftPersistTimer = null;
+    const persistResult = window.api?.store?.set?.(DRAFT_STORE_KEY, buildEditorSequenceDraft());
+    if (persistResult && typeof persistResult.catch === 'function') {
+      persistResult.catch(() => {});
+    }
+  }, DRAFT_PERSIST_DELAY_MS);
+}
+
+function applySequenceEditorState({
+  name = '',
+  timeline = [],
+  options = {},
+  sequenceId = null,
+  nextSaveState = 'draft',
+  nextSaveStateMessageKey = null,
+  navigate = false
+} = {}) {
+  activeSequenceId = sequenceId && getSequenceById(sequenceId) ? sequenceId : null;
+  setTimeline(timeline);
+  renderTimeline();
+  applySequenceOptionsToUi(options);
+  refreshSequencePreviewChart();
+
+  if ($('seq-name')) {
+    $('seq-name').value = name;
+  }
+
+  setSaveState(nextSaveState, nextSaveStateMessageKey);
+  updateSaveButtonState();
+  renderSequenceList();
+  if (navigate) {
+    navigateToMethodView();
+  }
 }
 
 function updateSaveButtonState() {
@@ -162,20 +257,41 @@ export function syncSequenceEditorUi(sequenceRunning = false) {
 function markEditorDirty() {
   if (activeSequenceId) {
     setSaveState('dirty');
-    return;
+  } else {
+    setSaveState('draft');
   }
 
-  setSaveState('draft');
+  scheduleSequenceDraftPersistence();
 }
 
-function createSequenceCopyName(name) {
+async function getStoredWorkflowNames() {
+  try {
+    const storedWorkflows = await window.api.store.get('saved-workflows');
+    return new Set(
+      Array.isArray(storedWorkflows)
+        ? storedWorkflows
+            .map((workflow) => String(workflow?.name || '').trim().toLowerCase())
+            .filter(Boolean)
+        : []
+    );
+  } catch {
+    return new Set();
+  }
+}
+
+async function createSequenceCopyName(name) {
   const baseName = `${name} ${t('sequencer.copySuffix', 'Copy')}`;
-  if (!savedSequences.some((sequence) => sequence.name.toLowerCase() === baseName.toLowerCase())) {
+  const takenNames = new Set(savedSequences.map((sequence) => sequence.name.toLowerCase()));
+
+  const workflowNames = await getStoredWorkflowNames();
+  workflowNames.forEach((workflowName) => takenNames.add(workflowName));
+
+  if (!takenNames.has(baseName.toLowerCase())) {
     return baseName;
   }
 
   let index = 2;
-  while (savedSequences.some((sequence) => sequence.name.toLowerCase() === `${baseName} ${index}`.toLowerCase())) {
+  while (takenNames.has(`${baseName} ${index}`.toLowerCase())) {
     index += 1;
   }
 
@@ -264,22 +380,14 @@ function getSequenceById(sequenceId) {
 }
 
 export function loadSequenceIntoEditor(sequence, { navigate = true } = {}) {
-  activeSequenceId = sequence.id;
-  setTimeline(sequence.timeline);
-  renderTimeline();
-  applySequenceOptionsToUi(sequence.options);
-  refreshSequencePreviewChart();
-
-  if ($('seq-name')) {
-    $('seq-name').value = sequence.name;
-  }
-
-  setSaveState('saved');
-  updateSaveButtonState();
-  renderSequenceList();
-  if (navigate) {
-    navigateToMethodView();
-  }
+  applySequenceEditorState({
+    name: sequence.name,
+    timeline: sequence.timeline,
+    options: sequence.options,
+    sequenceId: sequence.id,
+    nextSaveState: 'saved',
+    navigate
+  });
   log(`SEQUENCE LOADED: ${sequence.name}`);
 }
 
@@ -303,20 +411,27 @@ export function loadSequenceById(sequenceId, options = {}) {
   return true;
 }
 
-export function loadSequenceDraft({ name = '', timeline = [], options = {} } = {}) {
-  activeSequenceId = null;
-  setTimeline(timeline);
-  renderTimeline();
-  applySequenceOptionsToUi(options);
-  refreshSequencePreviewChart();
+export function loadSequenceDraft({
+  name = '',
+  timeline = [],
+  options = {},
+  activeSequenceId: draftSequenceId = null,
+  saveState: draftSaveState = 'draft',
+  saveStateMessageKey: draftSaveStateMessageKey = null,
+  clearPersistedDraft = false
+} = {}) {
+  applySequenceEditorState({
+    name,
+    timeline,
+    options,
+    sequenceId: draftSequenceId,
+    nextSaveState: draftSaveState,
+    nextSaveStateMessageKey: draftSaveStateMessageKey
+  });
 
-  if ($('seq-name')) {
-    $('seq-name').value = name;
+  if (clearPersistedDraft) {
+    clearSequenceDraftPersistence();
   }
-
-  setSaveState('draft');
-  updateSaveButtonState();
-  renderSequenceList();
 }
 
 async function duplicateSequence(sequenceId) {
@@ -326,7 +441,7 @@ async function duplicateSequence(sequenceId) {
   const now = Date.now();
   const duplicatedSequence = {
     id: createSequenceId(),
-    name: createSequenceCopyName(sequence.name),
+    name: await createSequenceCopyName(sequence.name),
     timeline: sequence.timeline.map((block) => ({ ...block })),
     options: {
       ...sequence.options
@@ -414,6 +529,15 @@ async function persistEditorSequence(sequenceId, { allowEmptyTimeline = false, s
   }
 
   const { sequence, existing } = result;
+  const workflowNames = await getStoredWorkflowNames();
+  if (workflowNames.has(sequence.name.toLowerCase())) {
+    setSaveState('error', 'sequencer.saveState.duplicateName');
+    if (shouldLog) {
+      log({ sequence_save_error: t('sequencer.saveState.duplicateName', 'A saved sequence or workflow with this name already exists') });
+    }
+    return false;
+  }
+
   const isUpdatingExisting = Boolean(sequenceId && existing);
   if (!allowEmptyTimeline && !sequence.timeline.length) {
     if (shouldLog) {
@@ -431,6 +555,7 @@ async function persistEditorSequence(sequenceId, { allowEmptyTimeline = false, s
   ].sort((a, b) => b.updatedAt - a.updatedAt);
 
   await persistSavedSequences();
+  clearSequenceDraftPersistence();
   renderSequenceList();
   updateSaveButtonState();
   setSaveState('saved');
@@ -440,6 +565,21 @@ async function persistEditorSequence(sequenceId, { allowEmptyTimeline = false, s
     log(existing ? `SEQUENCE UPDATED: ${sequence.name}` : `SEQUENCE SAVED: ${sequence.name}`);
   }
 
+  return true;
+}
+
+async function restoreSequenceDraft() {
+  const stored = await window.api.store.get(DRAFT_STORE_KEY);
+  const draft = normalizeSequenceDraft(stored);
+  if (!draft) {
+    return false;
+  }
+
+  loadSequenceDraft({
+    ...draft,
+    activeSequenceId: getSequenceById(draft.activeSequenceId)?.id || null,
+    clearPersistedDraft: false
+  });
   return true;
 }
 
@@ -522,9 +662,12 @@ export async function initSequenceLibrary() {
   try {
     const stored = await window.api.store.get(STORE_KEY);
     savedSequences = normalizeSavedSequences(stored);
-    renderSequenceList();
-    updateSaveButtonState();
-    setSaveState('draft');
+    const restoredDraft = await restoreSequenceDraft();
+    if (!restoredDraft) {
+      renderSequenceList();
+      updateSaveButtonState();
+      setSaveState('draft');
+    }
     notifySequenceLibraryChanged();
   } catch (error) {
     savedSequences = [];

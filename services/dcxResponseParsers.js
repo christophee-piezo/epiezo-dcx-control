@@ -353,6 +353,101 @@ function parseIoPayload(raw) {
   return snapshot;
 }
 
+function resolveIoConfigurationGroupByPin(pinNumber) {
+  if ([1, 2, 3, 4].includes(pinNumber)) {
+    return 'digitalInputs';
+  }
+
+  if ([7, 8, 9, 10].includes(pinNumber)) {
+    return 'digitalOutputs';
+  }
+
+  if ([17, 18].includes(pinNumber)) {
+    return 'analogInputs';
+  }
+
+  if ([24, 25].includes(pinNumber)) {
+    return 'analogOutputs';
+  }
+
+  return null;
+}
+
+function parseIoConfigurationPayload(raw) {
+  const snapshot = {
+    raw: String(raw || ''),
+    systemType: null,
+    digitalInputs: {},
+    digitalOutputs: {},
+    analogInputs: {},
+    analogOutputs: {}
+  };
+
+  if (!snapshot.raw) {
+    return snapshot;
+  }
+
+  snapshot.raw
+    .split('@')
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .forEach((part) => {
+      const separatorIndex = part.indexOf(':');
+      if (separatorIndex < 0) {
+        return;
+      }
+
+      const key = part.slice(0, separatorIndex).trim();
+      const descriptor = part.slice(separatorIndex + 1).trim();
+      if (!key || !descriptor) {
+        return;
+      }
+
+      if (/^SystemType$/i.test(key)) {
+        const segments = descriptor
+          .split(',')
+          .map((segment) => segment.trim())
+          .filter((segment) => segment !== '');
+
+        snapshot.systemType = segments[1] ?? segments[0] ?? null;
+        return;
+      }
+
+      const pinMatch = key.match(/^dd_pin(\d+)$/i);
+      if (!pinMatch) {
+        return;
+      }
+
+      const pinNumber = Number(pinMatch[1]);
+      const group = resolveIoConfigurationGroupByPin(pinNumber);
+      if (!group) {
+        return;
+      }
+
+      const segments = descriptor
+        .split(',')
+        .map((segment) => segment.trim())
+        .filter((segment) => segment !== '');
+
+      if (String(segments[0] || '').toUpperCase() !== 'DDV') {
+        return;
+      }
+
+      const assignmentCode = segments[1] ?? '0';
+      const enabledValue = segments[2] ?? '0';
+      const pin = `PIN${pinNumber}`;
+
+      snapshot[group][pin] = {
+        pin,
+        assignmentCode: String(assignmentCode),
+        enabled: String(enabledValue) === '1',
+        rawEnabled: String(enabledValue)
+      };
+    });
+
+  return snapshot;
+}
+
 function mergeIoSnapshots(...snapshots) {
   return snapshots.reduce((nextSnapshot, snapshot) => {
     if (!snapshot) {
@@ -418,6 +513,7 @@ module.exports = {
   extractSystemInfoFromRaw,
   parseSetupPayload,
   parseIoPayload,
+  parseIoConfigurationPayload,
   mergeIoSnapshots,
   getIoDigitalState
 };

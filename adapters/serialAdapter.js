@@ -39,7 +39,18 @@ class SerialAdapter extends EventEmitter {
                     console.log(`[SERIAL] Connected to ${path} at ${baudRate}`);
                     
                     this.parser.on('data', (data) => {
-                        this.emit('data', this._parseTeensyData(data));
+                        const line = String(data || '').trim();
+
+                        if (!line) {
+                            return;
+                        }
+
+                        if (line.startsWith('#')) {
+                            console.log(`[SERIAL DEBUG] ${line}`);
+                            return;
+                        }
+
+                        this.emit('data', this._parseTeensyData(line));
                     });
 
                     this.port.on('close', () => {

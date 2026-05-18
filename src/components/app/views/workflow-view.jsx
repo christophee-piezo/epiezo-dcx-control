@@ -26,7 +26,7 @@ export function WorkflowView() {
           <CardContent className="p-3 pt-3 lg:p-4 lg:pt-4">
             <div className="grid gap-3">
               <div className="rounded-2xl border border-border/70 bg-background/55 p-3">
-                <div className="grid gap-3 xl:grid-cols-[minmax(0,1.25fr)_auto_auto] xl:items-end">
+                <div className="grid gap-3 2xl:grid-cols-[minmax(0,1.25fr)_auto_auto] 2xl:items-end">
                   <FormField label="Workflow Name" labelKey="workflow.library.name">
                     <Input data-i18n-placeholder="workflow.library.namePlaceholder" id="workflow-name" placeholder="Inspection Routine..." type="text" />
                   </FormField>

@@ -1,4 +1,4 @@
-import { applySystemInfo, initAmplitudeEnter, initButtons, initTelemetrySubscription } from './renderer/controls.js';
+import { applySystemInfo, initAmplitudeEnter, initButtons, initStatusMonitorSubscription, initTelemetrySubscription } from './renderer/controls.js';
 import { log } from './renderer/logger.js';
 import { initNavigation, setCurrentView } from './renderer/navigation.js';
 import { initPreferenceControls, loadUiPreferences } from './renderer/preferences.js';
@@ -20,12 +20,14 @@ export async function initializeRenderer() {
   const [
     { initializeMethodHome },
     { initializeSettingsPage },
+    { initializeDashboardExport },
     { initializeSequencePreviewChart },
     { initializeTelemetryChart },
     { initializeTestsPage }
   ] = await Promise.all([
     import('./renderer/method-home.js'),
     import('./renderer/settings-page.js'),
+    import('./renderer/dashboard-export.js'),
     import('./renderer/sequence-preview-chart.js'),
     import('./renderer/telemetry-chart.js'),
     import('./renderer/tests-page.js')
@@ -35,8 +37,10 @@ export async function initializeRenderer() {
   initializeSettingsPage();
   initAmplitudeEnter();
   initTelemetrySubscription();
+  initStatusMonitorSubscription();
   initializeSequencePreviewChart();
   initializeTelemetryChart();
+  initializeDashboardExport();
   initializeTestsPage();
   initPreferenceControls();
   renderTimeline();

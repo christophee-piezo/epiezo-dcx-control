@@ -712,7 +712,7 @@ function App() {
         id="app-shell"
         aria-hidden={!isAuthenticated}
         className={cn(
-          'grid h-full min-h-0 grid-cols-1 grid-rows-[auto_minmax(0,1fr)] overflow-y-auto bg-transparent transition-[filter,opacity] duration-200 md:grid-cols-[260px_minmax(0,1fr)] md:grid-rows-1 md:overflow-hidden xl:grid-cols-[280px_minmax(0,1fr)]',
+          'grid h-full min-h-0 grid-cols-1 grid-rows-[auto_minmax(0,1fr)] overflow-y-auto bg-transparent transition-[filter,opacity] duration-200 lg:grid-cols-[250px_minmax(0,1fr)] lg:grid-rows-1 lg:overflow-hidden xl:grid-cols-[270px_minmax(0,1fr)]',
           !isAuthenticated && 'pointer-events-none opacity-35 blur-[3px] saturate-50'
         )}
       >
