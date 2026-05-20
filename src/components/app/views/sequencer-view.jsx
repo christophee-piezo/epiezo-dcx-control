@@ -32,7 +32,7 @@ export function SequencerView() {
                     <Input id="seq-name" placeholder="Routine Name..." type="text" />
                   </FormField>
                   <FormField label="Loop Count" labelKey="sequencer.config.loopCount">
-                    <Input defaultValue="1" id="seq-loop-count" min="1" type="number" />
+                    <Input defaultValue="1" id="seq-loop-count" placeholder="1 or inf" type="text" />
                   </FormField>
                   <FormField label="Auto-Abort" labelKey="sequencer.config.autoAbort">
                     <NativeSelect defaultValue="ALARM" id="seq-auto-abort">

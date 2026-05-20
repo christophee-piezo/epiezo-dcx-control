@@ -9,6 +9,7 @@ import { initWorkflowLibrary, loadWorkflowDraft, syncWorkflowEditorFeedback } fr
 
 let sequenceRunning = false;
 let lastHeartbeatLogSignature = null;
+let resetCyclesConfirmationResolver = null;
 
 function getModeSwitchBlockedMessage(action = 'switch') {
   return action === 'disconnect'
@@ -60,6 +61,29 @@ function hasDashboardTeensyTransport() {
   return Boolean(runtimeState.simulation || runtimeState.connections?.teensy);
 }
 
+function isExternalAmplitudeEnabled() {
+  const toggle = $('settings-setup-amplitude-external');
+  if (toggle) {
+    return Boolean(toggle.checked);
+  }
+
+  return String(runtimeState.setupConfig?.externalamplitude ?? '').trim() === '1';
+}
+
+function getAmplitudeControlTransport() {
+  return isExternalAmplitudeEnabled() ? 'serial' : 'ethernet';
+}
+
+function hasAmplitudeControlSource() {
+  if (runtimeState.simulation) {
+    return true;
+  }
+
+  return getAmplitudeControlTransport() === 'serial'
+    ? Boolean(runtimeState.connections?.teensy)
+    : Boolean(runtimeState.connections?.ethernet);
+}
+
 export function hasTeensyControlSource() {
   return Boolean(runtimeState.simulation || runtimeState.connections?.teensy);
 }
@@ -77,10 +101,12 @@ function ensureTeensyControlSource(context) {
 function syncDashboardManualControlState() {
   const executionActive = Boolean(sequenceRunning || runtimeState.workflowRunning || runtimeState.hornScanRunning);
   const hasTeensyTransport = hasDashboardTeensyTransport();
+  const hasAmplitudeTransport = hasAmplitudeControlSource();
   const startButton = $('start-btn');
   const stopButton = $('stop-btn');
   const seekButton = $('seek-btn');
   const resetButton = $('reset-btn');
+  const resetCyclesButton = $('reset-cycles-btn');
   const amplitudeInput = $('amplitude-input');
 
   if (startButton) {
@@ -95,8 +121,12 @@ function syncDashboardManualControlState() {
     resetButton.disabled = executionActive || !hasTeensyTransport;
   }
 
+  if (resetCyclesButton) {
+    resetCyclesButton.disabled = executionActive || !hasTeensyTransport;
+  }
+
   if (amplitudeInput) {
-    amplitudeInput.disabled = executionActive || !hasTeensyTransport;
+    amplitudeInput.disabled = executionActive || !hasAmplitudeTransport;
   }
 
   if (stopButton) {
@@ -220,7 +250,9 @@ function syncWorkflowUiLockState() {
 
   const runSequenceButton = $('run-sequence-btn');
   if (runSequenceButton) {
-    runSequenceButton.disabled = executionActive || !hasTeensyTransport;
+    runSequenceButton.disabled = sequenceRunning
+      ? false
+      : (executionActive || !hasTeensyTransport);
   }
 
   const clearTimelineButton = $('clear-timeline-btn');
@@ -395,7 +427,7 @@ async function hydrateWorkflowStatus() {
   }
 }
 
-async function stopActiveSequence() {
+export async function stopActiveSequence() {
   if (typeof window.api?.dcx?.stopSequence !== 'function') {
     const res = { success: false, error: 'Sequence stop IPC is unavailable' };
     showFooterFeedback(res.error, { tone: 'error', timeout: 8000 });
@@ -419,7 +451,7 @@ async function stopActiveSequence() {
   }
 }
 
-async function stopActiveWorkflow() {
+export async function stopActiveWorkflow() {
   if (typeof window.api?.dcx?.stopWorkflow !== 'function') {
     const res = { success: false, error: 'Workflow stop IPC is unavailable' };
     showFooterFeedback(res.error, { tone: 'error', timeout: 8000 });
@@ -661,8 +693,47 @@ function actionLabel(action) {
     stop: 'Stop',
     seek: 'Seek',
     reset: 'Reset',
+    resetCycles: 'Reset cycles',
     setAmp: 'Amplitude update'
   }[action] || 'Control action';
+}
+
+function showResetCyclesConfirmationPopup() {
+  const popup = $('reset-cycles-confirmation-popup');
+  if (popup) {
+    popup.classList.remove('hidden');
+    popup.classList.add('flex');
+  }
+
+  return new Promise((resolve) => {
+    resetCyclesConfirmationResolver = resolve;
+  });
+}
+
+function resolveResetCyclesConfirmation(confirmed) {
+  const popup = $('reset-cycles-confirmation-popup');
+  if (popup) {
+    popup.classList.add('hidden');
+    popup.classList.remove('flex');
+  }
+
+  if (resetCyclesConfirmationResolver) {
+    const resolve = resetCyclesConfirmationResolver;
+    resetCyclesConfirmationResolver = null;
+    resolve(Boolean(confirmed));
+  }
+}
+
+async function requestResetCycles() {
+  const telemetry = getResolvedTelemetry(runtimeState.lastTelemetry || {});
+  if (telemetry.active) {
+    const confirmed = await showResetCyclesConfirmationPopup();
+    if (!confirmed) {
+      return { success: false, cancelled: true };
+    }
+  }
+
+  return control('resetCycles');
 }
 
 export function applySystemInfo(systemInfo = {}) {
@@ -843,7 +914,7 @@ async function updateAmplitudeFromUi() {
     return;
   }
 
-  await control('setAmp', { weldAmp: amp }, { transport: 'serial' });
+  await control('setAmp', { weldAmp: amp }, { transport: getAmplitudeControlTransport() });
 }
 
 async function ensureHardwareConnectedForStart() {
@@ -905,6 +976,9 @@ export function initButtons() {
   });
 
   $('sim-mode-toggle')?.addEventListener('change', updateSelectedModeFromUi);
+  $('settings-setup-amplitude-external')?.addEventListener('change', () => {
+    syncDashboardManualControlState();
+  });
 
   $('connection-failure-popup-reconnect')?.addEventListener('click', async () => {
     hideConnectionFailurePopup();
@@ -913,6 +987,12 @@ export function initButtons() {
 
   $('connection-failure-popup-dismiss')?.addEventListener('click', () => {
     hideConnectionFailurePopup();
+  });
+  $('reset-cycles-confirmation-confirm')?.addEventListener('click', () => {
+    resolveResetCyclesConfirmation(true);
+  });
+  $('reset-cycles-confirmation-cancel')?.addEventListener('click', () => {
+    resolveResetCyclesConfirmation(false);
   });
 
   document.addEventListener('app:telemetry-updated', () => {
@@ -949,6 +1029,9 @@ export function initButtons() {
   });
   $('seek-btn')?.addEventListener('click', () => control('seek', undefined, { transport: 'serial' }));
   $('reset-btn')?.addEventListener('click', () => control('reset', undefined, { transport: 'serial' }));
+  $('reset-cycles-btn')?.addEventListener('click', () => {
+    requestResetCycles();
+  });
 
   $('run-sequence-btn')?.addEventListener('click', async () => {
     if (sequenceRunning) {
@@ -1012,6 +1095,10 @@ export function initButtons() {
   });
 
   document.addEventListener('app:status-updated', () => {
+    syncDashboardManualControlState();
+  });
+
+  document.addEventListener('app:setup-config-updated', () => {
     syncDashboardManualControlState();
   });
 

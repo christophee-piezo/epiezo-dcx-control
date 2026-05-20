@@ -135,10 +135,44 @@ function getBlockDisplayName(type) {
   return type === 'PAUSE' ? 'STOP' : type;
 }
 
+function setBlockDragEnabled(block, enabled) {
+  if (!block) {
+    return;
+  }
+
+  block.draggable = Boolean(enabled);
+}
+
 function bindTimelineEditor(container) {
   if (container.dataset.editorBound === 'true') return;
 
   container.dataset.editorBound = 'true';
+  container.addEventListener('pointerdown', (event) => {
+    const input = event.target.closest('input[data-block-field]');
+    if (!input) return;
+
+    setBlockDragEnabled(input.closest('.block'), false);
+  });
+
+  container.addEventListener('focusin', (event) => {
+    const input = event.target.closest('input[data-block-field]');
+    if (!input) return;
+
+    setBlockDragEnabled(input.closest('.block'), false);
+  });
+
+  container.addEventListener('focusout', (event) => {
+    const input = event.target.closest('input[data-block-field]');
+    if (!input) return;
+
+    const block = input.closest('.block');
+    if (block && event.relatedTarget && block.contains(event.relatedTarget)) {
+      return;
+    }
+
+    setBlockDragEnabled(block, true);
+  });
+
   container.addEventListener('click', (event) => {
     const removeButton = event.target.closest('[data-remove-block]');
     if (!removeButton) return;
@@ -183,6 +217,12 @@ function attachDnD() {
 
   document.querySelectorAll('.block').forEach((block) => {
     block.addEventListener('dragstart', (event) => {
+      if (event.target.closest('input, button')) {
+        event.preventDefault();
+        clearDragPayload();
+        return;
+      }
+
       const payload = {
         type: 'timeline-block',
         index: Number(event.currentTarget.dataset.index)

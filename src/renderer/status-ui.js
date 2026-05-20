@@ -220,6 +220,49 @@ function toFiniteNumber(value) {
   return Number.isFinite(numericValue) ? numericValue : null;
 }
 
+function parseFrequencyDisplayValue(value) {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value;
+  }
+
+  const text = String(value || '').trim();
+  if (!text) {
+    return null;
+  }
+
+  const numericMatch = text.match(/-?\d+(?:\.\d+)?/);
+  if (!numericMatch) {
+    return null;
+  }
+
+  const numericValue = Number(numericMatch[0]);
+  if (!Number.isFinite(numericValue)) {
+    return null;
+  }
+
+  return /khz/i.test(text) ? numericValue * 1000 : numericValue;
+}
+
+function getRealtimeFrequencyDisplayValue(resolvedTelemetry = {}, { useSetupRealtimeData = false } = {}) {
+  if (useSetupRealtimeData && runtimeState.setupConfig?.digitaltune != null) {
+    return runtimeState.setupConfig.digitaltune;
+  }
+
+  const liveFrequency = toFiniteNumber(resolvedTelemetry.frequency);
+  if (liveFrequency != null && liveFrequency > 0) {
+    return liveFrequency;
+  }
+
+  const fallbackFrequency = [
+    runtimeState.setupConfig?.digitaltune,
+    runtimeState.systemInfo?.frequency
+  ]
+    .map((value) => parseFrequencyDisplayValue(value))
+    .find((value) => value != null);
+
+  return fallbackFrequency != null ? Math.round(fallbackFrequency) : resolvedTelemetry.frequency;
+}
+
 function enrichTelemetryChannels(telemetry = {}) {
   const serialAnalogInputs = [
     toFiniteNumber(telemetry.analog1),
@@ -264,9 +307,7 @@ function getRealtimeDisplayValues(telemetry = runtimeState.lastTelemetry || {}) 
   const useSetupRealtimeData = shouldUseSetupRealtimeData(resolvedTelemetry);
 
   return {
-    frequency: useSetupRealtimeData && runtimeState.setupConfig?.digitaltune != null
-      ? runtimeState.setupConfig.digitaltune
-      : resolvedTelemetry.frequency,
+    frequency: getRealtimeFrequencyDisplayValue(resolvedTelemetry, { useSetupRealtimeData }),
     amplitude: useSetupRealtimeData && runtimeState.setupConfig?.weldAmp != null
       ? runtimeState.setupConfig.weldAmp
       : resolvedTelemetry.amplitude,

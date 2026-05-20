@@ -2,7 +2,7 @@ const EventEmitter = require('events');
 
 const dcx = require('./dcxService');
 
-const POLL_INTERVAL_MS = 10;
+const POLL_INTERVAL_MS = 500;
 
 function normalizeSignalValue(value, fallback = false) {
   if (value == null) {

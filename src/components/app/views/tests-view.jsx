@@ -100,16 +100,21 @@ export function TestsView() {
             </div>
           </CardHeader>
           <CardContent className="flex min-h-0 flex-1 flex-col gap-4">
-            <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_auto] xl:items-center">
-              <div className="rounded-xl border border-border/60 bg-background/70 px-4 py-3 text-sm text-muted-foreground">
-                <div className="text-sm font-semibold text-foreground" id="tests-selected-name">No test loaded</div>
-                <div className="mt-1 truncate text-xs text-muted-foreground" id="tests-selected-meta">Load a saved sequence or workflow test to compare ideal and actual traces.</div>
-              </div>
+              <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_auto] xl:items-center">
+                <div className="rounded-xl border border-border/60 bg-background/70 px-4 py-3 text-sm text-muted-foreground">
+                  <div className="text-sm font-semibold text-foreground" id="tests-selected-name">No test loaded</div>
+                  <div className="mt-1 truncate text-xs text-muted-foreground" id="tests-selected-meta">Load a saved sequence or workflow test to compare ideal and actual traces.</div>
+                </div>
 
-              <Button data-i18n="tests.graph.runLoaded" id="run-selected-test-btn">
-                Run Loaded Test
-              </Button>
-            </div>
+                <div className="flex flex-wrap items-center gap-2 xl:justify-end">
+                  <Button data-i18n="tests.graph.runLoaded" id="run-selected-test-btn">
+                    Run Loaded Test
+                  </Button>
+                  <Button data-i18n="tests.graph.abortLoaded" id="abort-selected-test-btn" variant="destructive">
+                    Abort Test
+                  </Button>
+                </div>
+              </div>
 
             <div id="tests-telemetry-chart-container">
               <canvas className="h-full w-full" id="tests-telemetry-chart" />

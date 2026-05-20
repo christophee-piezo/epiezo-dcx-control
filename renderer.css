@@ -1839,6 +1839,11 @@
       min-width: calc(var(--spacing) * 32);
     }
   }
+  .sm\:min-w-36 {
+    @media (width >= 40rem) {
+      min-width: calc(var(--spacing) * 36);
+    }
+  }
   .sm\:min-w-\[8rem\] {
     @media (width >= 40rem) {
       min-width: 8rem;

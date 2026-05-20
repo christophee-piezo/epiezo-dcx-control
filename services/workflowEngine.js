@@ -154,7 +154,7 @@ class WorkflowEngine extends EventEmitter {
         await dcx.control('stop');
         break;
       case 'SET_AMP':
-        await dcx.control('setAmp', { weldAmp: instruction.amplitude }, { transport: 'serial' });
+        await dcx.control('setAmp', { weldAmp: instruction.amplitude });
         break;
       case 'SEEK':
         await dcx.control('seek', undefined, { transport: 'serial' });

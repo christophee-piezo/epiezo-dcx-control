@@ -65,14 +65,10 @@ class SequenceEngine extends EventEmitter {
 
     const timeline = payload.timeline.map((block, index) => this.normalizeBlock(block, index));
     const options = {
-      loopCount: this.parseNonNegativeInt(payload.options.loopCount, 1, 'Loop count'),
+      loopCount: this.parseLoopCount(payload.options.loopCount, 1),
       autoAbort: payload.options.autoAbort === 'NEVER' ? 'NEVER' : 'ALARM',
       flashBeforeRun: payload.options.flashBeforeRun === true || payload.options.flashBeforeRun === 'true'
     };
-
-    if (options.loopCount < 1) {
-      throw new Error('Loop count must be at least 1');
-    }
 
     return { timeline, options };
   }
@@ -115,6 +111,24 @@ class SequenceEngine extends EventEmitter {
     return parsed;
   }
 
+  parseLoopCount(value, fallback = 1) {
+    if (value == null || value === '') {
+      return fallback;
+    }
+
+    const normalizedValue = typeof value === 'string' ? value.trim().toLowerCase() : value;
+    if (normalizedValue === 'inf' || normalizedValue === 'infinite') {
+      return 'INF';
+    }
+
+    const parsed = Number(normalizedValue);
+    if (!Number.isInteger(parsed) || parsed < 1) {
+      throw new Error('Loop count must be a positive integer or inf');
+    }
+
+    return parsed;
+  }
+
   async runSequence(request) {
     if (this.isRunning) {
       return {
@@ -144,12 +158,14 @@ class SequenceEngine extends EventEmitter {
 
     this.isRunning = true;
     this.stopRequested = false;
+    const infiniteLooping = options.loopCount === 'INF';
+    const totalLoops = infiniteLooping ? 'INF' : options.loopCount;
     this.setStatus({
       state: 'starting',
       isRunning: true,
       message: 'PREPARING',
       currentLoop: 0,
-      totalLoops: options.loopCount,
+      totalLoops,
       currentBlock: 0,
       totalBlocks: timeline.length,
       blockType: null,
@@ -159,7 +175,7 @@ class SequenceEngine extends EventEmitter {
     try {
       await this.applySequenceOptions(options);
 
-      for (let loopIndex = 0; loopIndex < options.loopCount; loopIndex += 1) {
+      for (let loopIndex = 0; infiniteLooping || loopIndex < options.loopCount; loopIndex += 1) {
         for (let blockIndex = 0; blockIndex < timeline.length; blockIndex += 1) {
           if (this.stopRequested) {
             await this.safeStop();
@@ -174,11 +190,11 @@ class SequenceEngine extends EventEmitter {
             state: 'running',
             isRunning: true,
             currentLoop: loopIndex + 1,
-            totalLoops: options.loopCount,
+            totalLoops,
             currentBlock: blockIndex + 1,
             totalBlocks: timeline.length,
             blockType: block.type,
-            message: `LOOP ${loopIndex + 1}/${options.loopCount} · BLOCK ${blockIndex + 1}/${timeline.length} · ${blockLabel}`,
+            message: `LOOP ${loopIndex + 1}/${totalLoops} · BLOCK ${blockIndex + 1}/${timeline.length} · ${blockLabel}`,
             error: null
           });
 

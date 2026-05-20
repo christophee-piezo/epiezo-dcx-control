@@ -700,6 +700,21 @@ async function canFlashTeensy() {
 async function sendInitialStatus() {
   try {
     const config = store.get('dcx-config');
+    const connectionState = typeof ePiezo.getConnectionStateSnapshot === 'function'
+      ? ePiezo.getConnectionStateSnapshot()
+      : null;
+    const alreadyOnline = String(connectionState?.status || 'offline').toLowerCase() === 'online';
+
+    if (alreadyOnline) {
+      const status = await ePiezo.getStatus();
+      const systemInfo = await ePiezo.getSystemInfo({ status });
+      sendToRenderer('dcx:status-init', cacheStatusInitPayload({
+        ...status,
+        systemInfo,
+        config
+      }));
+      return;
+    }
 
     if (hasSavedConnection(config)) {
       const res = await ePiezo.connect(config);

@@ -230,6 +230,50 @@ function syncTestsScaleVisibility() {
   testsChart.options.scales.yTime.display = multiPlotEnabled && axisUsage.has('yTime');
 }
 
+function getTestsChartXBounds({ xAxis, yAxis, yAxisSelections, multiPlotEnabled }) {
+  const axisMeta = getAxisMeta(xAxis);
+  const preferredPoints = xAxis === 'time' && actualCaptureActive && actualSamples.length
+    ? (multiPlotEnabled
+        ? yAxisSelections.flatMap((axisKey) => buildChartPointsForAxis(actualSamples, axisKey))
+        : buildChartPoints(actualSamples))
+    : [];
+  const fallbackPoints = testsChart?.data?.datasets?.flatMap((dataset) => Array.isArray(dataset.data) ? dataset.data : []) || [];
+  const points = preferredPoints.length ? preferredPoints : fallbackPoints;
+  const xValues = points
+    .map((point) => Number(point?.x))
+    .filter((value) => Number.isFinite(value));
+
+  if (!xValues.length) {
+    return {
+      min: axisMeta.min ?? undefined,
+      max: axisMeta.max ?? undefined
+    };
+  }
+
+  let min = Math.min(...xValues);
+  let max = Math.max(...xValues);
+
+  if (Number.isFinite(axisMeta.min)) {
+    min = Math.min(min, axisMeta.min);
+  }
+
+  if (min === max) {
+    const padding = xAxis === 'time'
+      ? 0.25
+      : Math.max(1, Math.abs(max) * 0.05);
+    max += padding;
+
+    if (!Number.isFinite(axisMeta.min)) {
+      min -= padding;
+    }
+  }
+
+  return {
+    min,
+    max
+  };
+}
+
 function rebuildTestsChart() {
   if (!testsChart) {
     return;
@@ -270,10 +314,11 @@ function rebuildTestsChart() {
           data: buildChartPoints(actualSamples)
         }
       ];
+  const xBounds = getTestsChartXBounds({ xAxis, yAxis, yAxisSelections, multiPlotEnabled });
   testsChart.options.scales.x.title.text = formatAxisTitle(xAxis);
   testsChart.options.scales.y.title.text = multiPlotEnabled ? formatAxisTitle(primaryYAxis) : formatAxisTitle(yAxis);
-  testsChart.options.scales.x.min = xMeta.min ?? undefined;
-  testsChart.options.scales.x.max = xMeta.max ?? undefined;
+  testsChart.options.scales.x.min = xBounds.min;
+  testsChart.options.scales.x.max = xBounds.max;
   testsChart.options.scales.y.min = multiPlotEnabled ? undefined : yMeta.min ?? undefined;
   testsChart.options.scales.y.max = multiPlotEnabled ? undefined : yMeta.max ?? undefined;
   testsChart.options.scales.yPercent.title.text = formatAxisTitle(primaryPercentAxis);

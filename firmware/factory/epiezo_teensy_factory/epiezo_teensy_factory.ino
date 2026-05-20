@@ -24,11 +24,13 @@ const uint8_t PROGRAM_OPTO = 40;
 
 constexpr uint32_t SERIAL_BAUD_RATE = 115200;
 constexpr uint32_t TELEMETRY_INTERVAL_MS = 100;
+constexpr uint32_t ADS_RETRY_INTERVAL_MS = 1000;
 constexpr uint16_t DEFAULT_PULSE_MS = 200;
 constexpr uint16_t PROGRAM_PULSE_MS = 600;
-constexpr uint16_t DAC_MAX = 4095;
+constexpr uint16_t DAC_MAX = 3715;// The real max is 4095 but it was lowered because of the 3.34 output amplifier
 constexpr adsGain_t ADS_INPUT_GAIN = GAIN_ONE;
 constexpr uint8_t ANALOG_INPUT_CHANNEL_COUNT = 4;
+constexpr uint8_t ADS_CANDIDATE_ADDRESS_COUNT = 4;
 constexpr uint8_t FREQUENCY_INPUT_CHANNEL = 1;
 constexpr uint8_t AMPLITUDE_INPUT_CHANNEL = 0;
 constexpr float ANALOG_INPUT_MILLIVOLTS_PER_VOLT = 1000.0f;
@@ -38,16 +40,27 @@ constexpr float DCX_ANALOG_OUTPUT_MAX_VOLTS = 10.0f;
 constexpr float ANALOG_INPUT_DIVIDER_TOP_OHMS = 33000.0f;
 constexpr float ANALOG_INPUT_DIVIDER_BOTTOM_OHMS = 10000.0f;
 constexpr float ANALOG_INPUT_DIVIDER_GAIN = (ANALOG_INPUT_DIVIDER_TOP_OHMS + ANALOG_INPUT_DIVIDER_BOTTOM_OHMS) / ANALOG_INPUT_DIVIDER_BOTTOM_OHMS;
-constexpr float FREQUENCY_OUTPUT_MIN_HZ = 38900.0f;
-constexpr float FREQUENCY_OUTPUT_MAX_HZ = 40900.0f;
+constexpr int32_t DEFAULT_FREQUENCY_FAMILY_HZ = 40000;
+constexpr float FREQUENCY_20KHZ_OUTPUT_MIN_HZ = 19450.0f;
+constexpr float FREQUENCY_20KHZ_OUTPUT_MAX_HZ = 20450.0f;
+constexpr float FREQUENCY_30KHZ_OUTPUT_MIN_HZ = 29250.0f;
+constexpr float FREQUENCY_30KHZ_OUTPUT_MAX_HZ = 30750.0f;
+constexpr float FREQUENCY_40KHZ_OUTPUT_MIN_HZ = 38900.0f;
+constexpr float FREQUENCY_40KHZ_OUTPUT_MAX_HZ = 40900.0f;
 constexpr float AMPLITUDE_OUTPUT_MIN_PERCENT = 0.0f;
 constexpr float AMPLITUDE_OUTPUT_MAX_PERCENT = 100.0f;
+constexpr float AMPLITUDE_OUTPUT_OFFSET_PERCENT = 10.0f;
 constexpr float FREQUENCY_INPUT_SCALE = 1.0f;
 constexpr float FREQUENCY_INPUT_OFFSET_VOLTS = 0.0f;
 constexpr float AMPLITUDE_INPUT_SCALE = 1.0f;
 constexpr float AMPLITUDE_INPUT_OFFSET_VOLTS = 0.0f;
 constexpr bool ADC_DEBUG_STREAM_ENABLED_BY_DEFAULT = false;
-constexpr int32_t DEFAULT_FREQUENCY_HZ = 40000;
+constexpr uint8_t ADS_CANDIDATE_ADDRESSES[ADS_CANDIDATE_ADDRESS_COUNT] = {
+  0x48,
+  0x49,
+  0x4A,
+  0x4B
+};
 
 Adafruit_MCP4728 dac;
 Adafruit_ADS1015 ads;
@@ -68,12 +81,21 @@ struct AnalogInputSample {
 bool dacReady = false;
 bool adcReady = false;
 bool adcDebugStreamEnabled = ADC_DEBUG_STREAM_ENABLED_BY_DEFAULT;
+uint8_t adsAddress = 0;
+uint8_t adsWireScanMask = 0;
+uint8_t adsWire1ScanMask = 0;
+uint32_t lastAdsInitAttemptAt = 0;
+const char *adsBusLabel = "NONE";
 uint32_t lastTelemetryAt = 0;
 uint32_t lastCycleUpdateAt = 0;
-uint32_t cycles = 0;
+uint64_t cycles = 0;
+double cycleFractionRemainder = 0.0;
 uint16_t dacValues[4] = {0, 2048, 0, 0};
 int16_t analogInputsMillivolts[ANALOG_INPUT_CHANNEL_COUNT] = {0, 0, 0, 0};
 AnalogInputSample analogInputSamples[ANALOG_INPUT_CHANNEL_COUNT] = {};
+int32_t frequencyFamilyHz = DEFAULT_FREQUENCY_FAMILY_HZ;
+float frequencyOutputMinHz = FREQUENCY_40KHZ_OUTPUT_MIN_HZ;
+float frequencyOutputMaxHz = FREQUENCY_40KHZ_OUTPUT_MAX_HZ;
 int16_t frequencyOffsetPercent = 0;
 uint8_t amplitudePercent = 0;
 String serialBuffer;
@@ -164,9 +186,148 @@ float applyAnalogInputCalibration(uint8_t channel, float volts) {
   return (volts * calibration.scale) + calibration.offsetVolts;
 }
 
+bool setFrequencyFamilyHz(int32_t familyHz) {
+  switch (familyHz) {
+    case 20000:
+      frequencyFamilyHz = familyHz;
+      frequencyOutputMinHz = FREQUENCY_20KHZ_OUTPUT_MIN_HZ;
+      frequencyOutputMaxHz = FREQUENCY_20KHZ_OUTPUT_MAX_HZ;
+      return true;
+    case 30000:
+      frequencyFamilyHz = familyHz;
+      frequencyOutputMinHz = FREQUENCY_30KHZ_OUTPUT_MIN_HZ;
+      frequencyOutputMaxHz = FREQUENCY_30KHZ_OUTPUT_MAX_HZ;
+      return true;
+    case 40000:
+      frequencyFamilyHz = familyHz;
+      frequencyOutputMinHz = FREQUENCY_40KHZ_OUTPUT_MIN_HZ;
+      frequencyOutputMaxHz = FREQUENCY_40KHZ_OUTPUT_MAX_HZ;
+      return true;
+    default:
+      return false;
+  }
+}
+
+String formatI2cAddress(uint8_t address) {
+  if (address == 0) {
+    return String(F("NONE"));
+  }
+
+  String formatted = String(address, HEX);
+  formatted.toUpperCase();
+  return String(F("0x")) + formatted;
+}
+
+String formatAdsScanMask(uint8_t scanMask) {
+  if (scanMask == 0) {
+    return String(F("none"));
+  }
+
+  String detectedAddresses;
+  for (uint8_t index = 0; index < ADS_CANDIDATE_ADDRESS_COUNT; index++) {
+    if ((scanMask & (1 << index)) == 0) {
+      continue;
+    }
+
+    if (detectedAddresses.length() > 0) {
+      detectedAddresses += ',';
+    }
+
+    detectedAddresses += formatI2cAddress(ADS_CANDIDATE_ADDRESSES[index]);
+  }
+
+  return detectedAddresses;
+}
+
+uint8_t scanAdsCandidates(TwoWire &bus) {
+  uint8_t detectedMask = 0;
+
+  for (uint8_t index = 0; index < ADS_CANDIDATE_ADDRESS_COUNT; index++) {
+    bus.beginTransmission(ADS_CANDIDATE_ADDRESSES[index]);
+    if (bus.endTransmission() == 0) {
+      detectedMask |= static_cast<uint8_t>(1 << index);
+    }
+  }
+
+  return detectedMask;
+}
+
+bool initializeAdsOnBus(TwoWire &bus, const char *busLabel, uint8_t detectedMask) {
+  for (uint8_t index = 0; index < ADS_CANDIDATE_ADDRESS_COUNT; index++) {
+    if ((detectedMask & (1 << index)) == 0) {
+      continue;
+    }
+
+    const uint8_t candidateAddress = ADS_CANDIDATE_ADDRESSES[index];
+    if (!ads.begin(candidateAddress, &bus)) {
+      continue;
+    }
+
+    ads.setGain(ADS_INPUT_GAIN);
+    ads.setDataRate(RATE_ADS1015_1600SPS);
+    adcReady = true;
+    adsAddress = candidateAddress;
+    adsBusLabel = busLabel;
+    return true;
+  }
+
+  return false;
+}
+
+bool initializeAds() {
+  lastAdsInitAttemptAt = millis();
+  adsWireScanMask = scanAdsCandidates(Wire);
+  adsWire1ScanMask = scanAdsCandidates(Wire1);
+
+  adcReady = false;
+  adsAddress = 0;
+  adsBusLabel = "NONE";
+
+  if (initializeAdsOnBus(Wire, "Wire", adsWireScanMask)) {
+    return true;
+  }
+
+  if (initializeAdsOnBus(Wire1, "Wire1", adsWire1ScanMask)) {
+    return true;
+  }
+
+  return false;
+}
+
+void ensureAdsReady() {
+  if (adcReady) {
+    return;
+  }
+
+  const uint32_t now = millis();
+  if (lastAdsInitAttemptAt != 0 && (now - lastAdsInitAttemptAt) < ADS_RETRY_INTERVAL_MS) {
+    return;
+  }
+
+  const bool wasReady = adcReady;
+  if (initializeAds() && !wasReady) {
+    writeStatusMessage(
+      String(F("ADS1015 detected"))
+      + F(" BUS=") + adsBusLabel
+      + F(" ADDR=") + formatI2cAddress(adsAddress)
+    );
+  }
+}
+
+void printAdsStatus() {
+  writeStatusMessage(
+    String(F("ADS_STATUS READY=")) + (adcReady ? F("1") : F("0"))
+    + F(" BUS=") + adsBusLabel
+    + F(" ADDR=") + formatI2cAddress(adsAddress)
+    + F(" WIRE_SCAN=") + formatAdsScanMask(adsWireScanMask)
+    + F(" WIRE1_SCAN=") + formatAdsScanMask(adsWire1ScanMask)
+  );
+}
+
 AnalogInputSample sampleAdsChannel(uint8_t channel, bool compensateDivider) {
   AnalogInputSample sample = { 0, 0.0f, 0.0f, 0 };
 
+  ensureAdsReady();
   if (!adcReady || channel >= ANALOG_INPUT_CHANNEL_COUNT) {
     return sample;
   }
@@ -237,8 +398,13 @@ void setDacChannelValue(uint8_t channel, uint16_t value) {
 
 void setAmplitudePercent(uint8_t percent) {
   amplitudePercent = static_cast<uint8_t>(clampInt32(percent, 0, 100));
+  const float correctedPercent = clampFloat(
+    static_cast<float>(amplitudePercent) - AMPLITUDE_OUTPUT_OFFSET_PERCENT,
+    AMPLITUDE_OUTPUT_MIN_PERCENT,
+    AMPLITUDE_OUTPUT_MAX_PERCENT
+  );
   const float normalized =
-    clampFloat(static_cast<float>(amplitudePercent) / 100.0f, 0.0f, 1.0f);
+    clampFloat(correctedPercent / 100.0f, 0.0f, 1.0f);
 
   setDacChannelValue(
     0,
@@ -307,6 +473,12 @@ void clearMemoryPulse() {
   pulsePin(Pins::MEMORY_CLEAR, DEFAULT_PULSE_MS);
 }
 
+void resetCycleEstimate() {
+  cycles = 0;
+  cycleFractionRemainder = 0.0;
+  lastCycleUpdateAt = millis();
+}
+
 void resetFactoryState() {
   stopSonics();
   setOutputPin(Pins::EXT_SEEK, false);
@@ -316,14 +488,13 @@ void resetFactoryState() {
   setOutputPin(Pins::PROGRAM_OPTO, false);
   setOutputPin(Pins::RELAY_K5, false);
   setAmplitudeSourceExternal(false);
-  cycles = 0;
+  resetCycleEstimate();
   amplitudePercent = 0;
   frequencyOffsetPercent = 0;
   setDacChannelValue(0, 0);
   setDacChannelValue(1, 2048);
   setDacChannelValue(2, 0);
   setDacChannelValue(3, 0);
-  lastCycleUpdateAt = millis();
   updateStatusLeds();
 }
 
@@ -336,6 +507,8 @@ int16_t readAdsInputMillivolts(uint8_t channel, bool compensateDivider = false) 
 }
 
 void sampleAnalogInputs() {
+  ensureAdsReady();
+
   for (uint8_t channel = 0; channel < ANALOG_INPUT_CHANNEL_COUNT; channel++) {
     analogInputSamples[channel] = sampleAdsChannel(channel, ANALOG_INPUT_CALIBRATIONS[channel].compensateDivider);
     analogInputsMillivolts[channel] = analogInputSamples[channel].inputMillivolts;
@@ -353,9 +526,19 @@ float deriveFrequencyHz() {
     inputVolts,
     DCX_ANALOG_OUTPUT_MIN_VOLTS,
     DCX_ANALOG_OUTPUT_MAX_VOLTS,
-    FREQUENCY_OUTPUT_MIN_HZ,
-    FREQUENCY_OUTPUT_MAX_HZ
+    frequencyOutputMinHz,
+    frequencyOutputMaxHz
   );
+}
+
+bool tryDeriveFrequencyHz(float &frequencyHz) {
+  if (!adcReady) {
+    frequencyHz = 0.0f;
+    return false;
+  }
+
+  frequencyHz = deriveFrequencyHz();
+  return isfinite(frequencyHz) && frequencyHz > 0.0f;
 }
 
 float deriveAmplitudePercent() {
@@ -374,32 +557,47 @@ float deriveAmplitudePercent() {
   );
 }
 
-void updateCycleEstimate() {
-  const bool active = readInput(Pins::SONICS_ACTIVE);
+void updateCycleEstimate(float measuredFrequencyHz, bool hasMeasuredFrequency) {
   const uint32_t now = millis();
-  const uint32_t elapsedMs = now - lastCycleUpdateAt;
-  lastCycleUpdateAt = now;
 
-  if (!active || elapsedMs == 0) {
+  if (lastCycleUpdateAt == 0) {
+    lastCycleUpdateAt = now;
     return;
   }
 
-  const float derivedFrequencyHz = deriveFrequencyHz();
-  const float effectiveFrequencyHz = derivedFrequencyHz > static_cast<float>(DEFAULT_FREQUENCY_HZ)
-    ? derivedFrequencyHz
-    : static_cast<float>(DEFAULT_FREQUENCY_HZ);
-  cycles += static_cast<uint32_t>(lroundf((effectiveFrequencyHz * static_cast<float>(elapsedMs)) / 1000.0f));
+  const uint32_t elapsedMs = now - lastCycleUpdateAt;
+  const bool active = readInput(Pins::SONICS_ACTIVE);
+
+  if (!active || elapsedMs == 0 || !hasMeasuredFrequency) {
+    lastCycleUpdateAt = now;
+    return;
+  }
+
+  lastCycleUpdateAt = now;
+
+  const double cycleDelta = (static_cast<double>(measuredFrequencyHz) * static_cast<double>(elapsedMs)) / 1000.0
+    + cycleFractionRemainder;
+  const uint32_t wholeCycles = cycleDelta > 0.0
+    ? static_cast<uint32_t>(floor(cycleDelta))
+    : 0;
+
+  cycles += wholeCycles;
+  cycleFractionRemainder = cycleDelta - static_cast<double>(wholeCycles);
 }
 
 void emitTelemetry() {
   sampleAnalogInputs();
+  float measuredFrequencyHz = 0.0f;
+  const bool hasMeasuredFrequency = tryDeriveFrequencyHz(measuredFrequencyHz);
   if (adcDebugStreamEnabled) {
     printAnalogInputDebug();
   }
-  updateCycleEstimate();
+  updateCycleEstimate(measuredFrequencyHz, hasMeasuredFrequency);
   updateStatusLeds();
 
-  const int32_t frequencyHz = static_cast<int32_t>(lroundf(deriveFrequencyHz()));
+  const int32_t frequencyHz = hasMeasuredFrequency
+    ? static_cast<int32_t>(lroundf(measuredFrequencyHz))
+    : 0;
   const int32_t liveAmplitudePercent = static_cast<int32_t>(lroundf(deriveAmplitudePercent()));
 
   Serial.print(frequencyHz);
@@ -436,13 +634,22 @@ void printAnalogInputDebug() {
   writeStatusMessage(
     String(F("ADC_DEBUG "))
 
-    + F("FREQ_CH=") + String(FREQUENCY_INPUT_CHANNEL)
+    + F("READY=") + String(adcReady ? 1 : 0)
+    + F(" BUS=") + adsBusLabel
+    + F(" ADDR=") + formatI2cAddress(adsAddress)
+    + F(" WIRE_SCAN=") + formatAdsScanMask(adsWireScanMask)
+    + F(" WIRE1_SCAN=") + formatAdsScanMask(adsWire1ScanMask)
+
+    + F(" FREQ_CH=") + String(FREQUENCY_INPUT_CHANNEL)
 
     + F(" FREQ_COUNTS=") + frequencyChannel.counts
     + F(" FREQ_RAW_MV=") + voltsToMillivolts(frequencyChannel.adsVolts)
     + F(" FREQ_ADS_V=") + String(frequencyChannel.adsVolts, 4)
     + F(" FREQ_INPUT_MV=") + frequencyChannel.inputMillivolts
     + F(" FREQ_INPUT_V=") + String(frequencyChannel.inputVolts, 4)
+    + F(" FREQ_FAMILY=") + String(frequencyFamilyHz)
+    + F(" FREQ_MIN=") + String(frequencyOutputMinHz, 1)
+    + F(" FREQ_MAX=") + String(frequencyOutputMaxHz, 1)
     + F(" FREQ_HZ=") + String(deriveFrequencyHz(), 1)
 
     + F(" AMP_CH=") + String(AMPLITUDE_INPUT_CHANNEL)
@@ -465,7 +672,7 @@ int32_t parseNumber(const String &text, int32_t fallback = 0) {
 }
 
 void printHelp() {
-  writeStatusMessage(F("Commands: START [0-100], STOP, SEEK, RESET, CLEAR, MEMORY_CLEAR, SET_AMP <0-100>, SET_FREQ_OFFSET <-100..100>, SET_AMPLITUDE_SOURCE <INTERNAL|EXTERNAL>, SET_DAC <A|B|C|D> <0-4095>, PROGRAM, STATUS, ADC_DEBUG [ON|OFF], FACTORY_RESET, HELP, PING"));
+  writeStatusMessage(F("Commands: START [0-100], STOP, SEEK, RESET, CLEAR, MEMORY_CLEAR, SET_AMP <0-100>, SET_FREQ_OFFSET <-100..100>, SET_FREQ_FAMILY <20000|30000|40000>, SET_AMPLITUDE_SOURCE <INTERNAL|EXTERNAL>, SET_DAC <A|B|C|D> <0-4095>, PROGRAM, STATUS, ADC_DEBUG [ON|OFF], FACTORY_RESET, HELP, PING"));
 }
 
 void processCommand(String line) {
@@ -553,6 +760,8 @@ void processCommand(String line) {
 
   if (command == "CLEAR" || command == "MEMORY_CLEAR") {
     clearMemoryPulse();
+    resetCycleEstimate();
+    emitTelemetry();
     writeStatusMessage(F("OK CLEAR"));
     return;
   }
@@ -579,6 +788,21 @@ void processCommand(String line) {
   if (command == "SET_FREQ_OFFSET") {
     setFrequencyOffsetPercent(static_cast<int16_t>(clampInt32(parseNumber(arguments), -100, 100)));
     writeStatusMessage(F("OK SET_FREQ_OFFSET"));
+    return;
+  }
+
+  if (command == "SET_FREQ_FAMILY") {
+    const int32_t requestedFamilyHz = parseNumber(arguments, DEFAULT_FREQUENCY_FAMILY_HZ);
+    if (!setFrequencyFamilyHz(requestedFamilyHz)) {
+      writeStatusMessage(F("ERR SET_FREQ_FAMILY expects 20000, 30000, or 40000"));
+      return;
+    }
+
+    writeStatusMessage(
+      String(F("OK SET_FREQ_FAMILY FAMILY=")) + String(frequencyFamilyHz)
+      + F(" MIN=") + String(frequencyOutputMinHz, 1)
+      + F(" MAX=") + String(frequencyOutputMaxHz, 1)
+    );
     return;
   }
 
@@ -669,16 +893,12 @@ void setupDevices() {
   Wire.begin();
   Wire1.begin();
 
-  adcReady = ads.begin(ADS1X15_ADDRESS, &Wire);
-  if (adcReady) {
-    // GAIN_ONE selects a +/-4.096 V full-scale range. With the 33k/10k divider,
-    // the maximum 10 V DCX output is about 2.326 V at the ADS input, so this
-    // setting keeps comfortable headroom while preserving good resolution.
-    // computeVolts() must use this configured PGA range; fixed factors like
-    // 0.003f are incorrect because ADS1015 LSB size changes with gain.
-    ads.setGain(ADS_INPUT_GAIN);
-    ads.setDataRate(RATE_ADS1015_1600SPS);
-  }
+  // GAIN_ONE selects a +/-4.096 V full-scale range. With the 33k/10k divider,
+  // the maximum 10 V DCX output is about 2.326 V at the ADS input, so this
+  // setting keeps comfortable headroom while preserving good resolution.
+  // computeVolts() must use this configured PGA range; fixed factors like
+  // 0.003f are incorrect because ADS1015 LSB size changes with gain.
+  initializeAds();
 
   dacReady = dac.begin(MCP4728_I2CADDR_DEFAULT, &Wire1);
 }
@@ -689,6 +909,7 @@ void setup() {
   setupOutputs();
   setupDevices();
   resetFactoryState();
+  printAdsStatus();
   writeStatusMessage(F("ePiezo Teensy factory firmware ready"));
   printHelp();
 }

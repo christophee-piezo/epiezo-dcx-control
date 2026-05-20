@@ -11,8 +11,26 @@ function readNumber(id, fallback = 0) {
   return Number.isFinite(value) ? value : fallback;
 }
 
-function getLoopCount() {
-  return Math.max(1, Math.round(readNumber('seq-loop-count', 1)) || 1);
+function parseLoopCountInputValue(value) {
+  const text = String(value ?? '').trim().toLowerCase();
+  if (text === 'inf' || text === 'infinite') {
+    return {
+      isInfinite: true,
+      previewLoopCount: 1,
+      displayValue: 'inf'
+    };
+  }
+
+  const numericValue = Number(text);
+  const loopCount = Number.isFinite(numericValue) && numericValue > 0
+    ? Math.max(1, Math.round(numericValue))
+    : 1;
+
+  return {
+    isInfinite: false,
+    previewLoopCount: loopCount,
+    displayValue: String(loopCount)
+  };
 }
 
 function addPoint(points, timeMs, amplitude) {
@@ -29,14 +47,14 @@ function addPoint(points, timeMs, amplitude) {
 
 function buildSequencePreview() {
   const timeline = getTimeline();
-  const loopCount = getLoopCount();
+  const loopConfig = parseLoopCountInputValue($('seq-loop-count')?.value);
   const points = [];
   let elapsedMs = 0;
   let currentAmplitude = 0;
 
   addPoint(points, elapsedMs, currentAmplitude);
 
-  for (let loopIndex = 0; loopIndex < loopCount; loopIndex += 1) {
+  for (let loopIndex = 0; loopIndex < loopConfig.previewLoopCount; loopIndex += 1) {
     timeline.forEach((block) => {
       const durationMs = Math.max(0, Number(block.duration) || 0);
 
@@ -70,7 +88,8 @@ function buildSequencePreview() {
   return {
     points,
     totalDurationMs: elapsedMs,
-    loopCount,
+    loopCount: loopConfig.displayValue,
+    isInfinite: loopConfig.isInfinite,
     blockCount: timeline.length
   };
 }
@@ -146,7 +165,7 @@ function updatePreviewFrameWidth({ blockCount, totalDurationMs }) {
   frame.style.width = `${Math.round(targetWidth)}px`;
 }
 
-function updatePreviewSummary({ totalDurationMs, loopCount, blockCount }) {
+function updatePreviewSummary({ totalDurationMs, loopCount, blockCount, isInfinite }) {
   const summary = $('sequence-preview-summary');
   if (!summary) {
     return;
@@ -156,11 +175,15 @@ function updatePreviewSummary({ totalDurationMs, loopCount, blockCount }) {
   const blockLabel = blockCount === 1
     ? t('sequencer.blocks.single', 'block')
     : t('sequencer.blocks.plural', 'blocks');
-  const loopLabel = loopCount === 1
+  const numericLoopCount = Number(loopCount);
+  const loopLabel = numericLoopCount === 1
     ? t('sequencer.preview.loopSingle', 'loop')
     : t('sequencer.preview.loopPlural', 'loops');
+  const durationLabel = isInfinite
+    ? t('sequencer.preview.continuous', 'continuous')
+    : `${durationSeconds}s`;
 
-  summary.textContent = `${blockCount} ${blockLabel} · ${loopCount} ${loopLabel} · ${durationSeconds}s`;
+  summary.textContent = `${blockCount} ${blockLabel} · ${loopCount} ${loopLabel} · ${durationLabel}`;
 }
 
 export function refreshSequencePreviewChart() {

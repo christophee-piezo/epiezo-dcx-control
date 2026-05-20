@@ -765,6 +765,28 @@ function App() {
         </div>
       </div>
 
+      <div className="fixed inset-0 z-[120] hidden items-center justify-center bg-black/72 p-4 backdrop-blur-sm" id="reset-cycles-confirmation-popup" role="dialog" aria-modal="true" aria-labelledby="reset-cycles-confirmation-popup-title">
+        <div className="w-full max-w-md rounded-3xl border border-border/70 bg-background/95 p-5 shadow-2xl">
+          <div className="text-[0.68rem] font-semibold uppercase tracking-[0.22em] text-amber-300" data-i18n="dashboard.resetCyclesPopup.eyebrow">
+            Warning
+          </div>
+          <h2 className="mt-2 text-xl font-semibold text-foreground" data-i18n="dashboard.resetCyclesPopup.title" id="reset-cycles-confirmation-popup-title">
+            Reset Cycles While Active?
+          </h2>
+          <p className="mt-3 text-sm leading-6 text-muted-foreground" data-i18n="dashboard.resetCyclesPopup.message" id="reset-cycles-confirmation-popup-message">
+            Sonics is currently active. Resetting cycles now may clear the live count during a run. Do you want to continue?
+          </p>
+          <div className="mt-5 flex flex-col gap-3 sm:flex-row sm:justify-end">
+            <Button className="sm:min-w-36" data-i18n="dashboard.resetCyclesPopup.confirm" id="reset-cycles-confirmation-confirm">
+              Reset Cycles
+            </Button>
+            <Button className="sm:min-w-28" data-i18n="dashboard.resetCyclesPopup.cancel" id="reset-cycles-confirmation-cancel" variant="outline">
+              Cancel
+            </Button>
+          </div>
+        </div>
+      </div>
+
       {isLoadingAuth ? <AuthLoadingScreen /> : null}
 
       {authState.status === 'setup' ? (

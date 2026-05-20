@@ -1,6 +1,6 @@
 import { t } from './preferences.js';
 import { $, runtimeState } from './runtime.js';
-import { hasTeensyControlSource, runSequenceFromUi, runWorkflowFromUi } from './controls.js';
+import { hasTeensyControlSource, runSequenceFromUi, runWorkflowFromUi, stopActiveSequence, stopActiveWorkflow } from './controls.js';
 import { log } from './logger.js';
 import { getSavedSequences, loadSequenceById } from './sequence-library.js';
 import { getResolvedTelemetry, showFooterFeedback } from './status-ui.js';
@@ -43,6 +43,16 @@ let selectedTestKey = null;
 let autoSaveTestKeys = new Set();
 let testsComparisonPersistTimer = null;
 let testsComparisonStorageBound = false;
+
+function getFiniteLoopCount(value, fallback = 1) {
+  const text = String(value ?? '').trim().toLowerCase();
+  if (!text || text === 'inf' || text === 'infinite') {
+    return fallback;
+  }
+
+  const numericValue = Number(text);
+  return Number.isInteger(numericValue) && numericValue > 0 ? numericValue : fallback;
+}
 
 function escapeHtml(value) {
   return String(value)
@@ -461,7 +471,7 @@ function setSelectedTestMeta(test) {
 function buildBaseIdealTelemetry(overrides = {}) {
   return {
     deviceStatus: 'Ideal Ready',
-    frequency: 40000,
+    frequency: 0,
     power: 0,
     amplitude: 0,
     aux1: 0,
@@ -511,7 +521,7 @@ function appendIdealSegment(samples, startTime, duration, telemetry, cycleRate =
 
 function buildSequenceIdealSamples(sequence) {
   const samples = [];
-  const loopCount = Math.max(1, Number(sequence.options?.loopCount) || 1);
+  const loopCount = getFiniteLoopCount(sequence.options?.loopCount, 1);
   let elapsed = 0;
   let currentTelemetry = buildBaseIdealTelemetry();
 
@@ -532,22 +542,12 @@ function buildSequenceIdealSamples(sequence) {
         };
         const segment = appendIdealSegment(samples, elapsed, block.duration, pulseTelemetry, Math.max(1, amplitude / 2));
         elapsed = segment.nextTime;
-        currentTelemetry = buildBaseIdealTelemetry({
-          amplitude,
-          cycles: segment.cycles
-        });
+        currentTelemetry = buildBaseIdealTelemetry({ cycles: segment.cycles });
         pushIdealSample(samples, elapsed, currentTelemetry);
         return;
       }
 
-      const pauseTelemetry = {
-        ...currentTelemetry,
-        active: 0,
-        seek: 0,
-        frequency: 40000,
-        power: 0,
-        deviceStatus: 'Ideal Ready'
-      };
+      const pauseTelemetry = buildBaseIdealTelemetry({ cycles: currentTelemetry.cycles || 0 });
       const segment = appendIdealSegment(samples, elapsed, block.duration, pauseTelemetry, 0);
       elapsed = segment.nextTime;
       currentTelemetry = {
@@ -580,7 +580,7 @@ function buildWorkflowIdealSamples(workflow) {
   const instructions = parseWorkflowInstructions(workflow.script);
   let elapsed = 0;
   let amplitude = 80;
-  let currentTelemetry = buildBaseIdealTelemetry({ amplitude });
+  let currentTelemetry = buildBaseIdealTelemetry();
 
   pushIdealSample(samples, elapsed, currentTelemetry);
 
@@ -590,7 +590,7 @@ function buildWorkflowIdealSamples(workflow) {
         amplitude = Number(instruction.argument) || amplitude;
         currentTelemetry = {
           ...currentTelemetry,
-          amplitude
+          amplitude: currentTelemetry.active ? amplitude : 0
         };
         pushIdealSample(samples, elapsed, currentTelemetry);
         break;
@@ -613,6 +613,7 @@ function buildWorkflowIdealSamples(workflow) {
           active: 0,
           seek: 1,
           frequency: 39880,
+          amplitude: 0,
           power: 8,
           deviceStatus: 'Ideal Seek'
         };
@@ -620,10 +621,7 @@ function buildWorkflowIdealSamples(workflow) {
         break;
       case 'STOP':
       case 'RESET':
-        currentTelemetry = buildBaseIdealTelemetry({
-          amplitude,
-          cycles: currentTelemetry.cycles || 0
-        });
+        currentTelemetry = buildBaseIdealTelemetry({ cycles: currentTelemetry.cycles || 0 });
         pushIdealSample(samples, elapsed, currentTelemetry);
         break;
       case 'WAIT': {
@@ -644,7 +642,6 @@ function buildWorkflowIdealSamples(workflow) {
   });
 
   currentTelemetry = buildBaseIdealTelemetry({
-    amplitude,
     cycles: currentTelemetry.cycles || 0
   });
   pushIdealSample(samples, elapsed, currentTelemetry);
@@ -664,11 +661,18 @@ function buildIdealSamplesForTest(test) {
 
 function updateRunButtonState() {
   const runButton = $('run-selected-test-btn');
-  if (!runButton) {
+  const abortButton = $('abort-selected-test-btn');
+  if (!runButton && !abortButton) {
     return;
   }
 
-  runButton.disabled = !getSelectedTest() || isExecutionActive() || !hasTeensyControlSource();
+  if (runButton) {
+    runButton.disabled = !getSelectedTest() || isExecutionActive() || !hasTeensyControlSource();
+  }
+
+  if (abortButton) {
+    abortButton.disabled = !runtimeState.sequenceRunning && !runtimeState.workflowRunning;
+  }
 }
 
 function renderTestsList() {
@@ -803,6 +807,20 @@ async function runLoadedTest() {
   }
 }
 
+async function abortLoadedTest() {
+  if (runtimeState.sequenceRunning) {
+    await stopActiveSequence();
+    return;
+  }
+
+  if (runtimeState.workflowRunning) {
+    await stopActiveWorkflow();
+    return;
+  }
+
+  showFooterFeedback('No test is currently running.', { tone: 'info', timeout: 4000 });
+}
+
 function bindFilterButtons() {
   document.querySelectorAll('[data-tests-filter]').forEach((button) => {
     if (button.dataset.bound === 'true') {
@@ -887,6 +905,16 @@ function bindRunSelectedAction() {
   button.addEventListener('click', runLoadedTest);
 }
 
+function bindAbortSelectedAction() {
+  const button = $('abort-selected-test-btn');
+  if (!button || button.dataset.bound === 'true') {
+    return;
+  }
+
+  button.dataset.bound = 'true';
+  button.addEventListener('click', abortLoadedTest);
+}
+
 function bindExportAction() {
   const button = $('export-tests-data-btn');
   if (!button || button.dataset.bound === 'true') {
@@ -903,6 +931,7 @@ export function initializeTestsPage() {
   bindFilterInputs();
   bindTestsListActions();
   bindRunSelectedAction();
+  bindAbortSelectedAction();
   bindExportAction();
   setSelectedTestMeta(null);
   renderTestsList();

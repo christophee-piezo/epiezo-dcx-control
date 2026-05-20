@@ -54,7 +54,7 @@ export const runtimeState = {
 };
 
 let timeline = [
-  { type: 'PULSE', duration: 1000, amplitude: 80, ramp: 50 },
+  { type: 'PULSE', duration: 1000, amplitude: 40, ramp: 80 },
   { type: 'PAUSE', duration: 500 }
 ];
 
@@ -71,7 +71,7 @@ export function getTimelineSnapshot() {
 export function createTimelineBlock(type) {
   return type === 'PAUSE'
     ? { type: 'PAUSE', duration: 500 }
-    : { type: 'PULSE', duration: 1000, amplitude: 80, ramp: 50 };
+    : { type: 'PULSE', duration: 1000, amplitude: 40, ramp: 80 };
 }
 
 export function setDragPayload(payload) {

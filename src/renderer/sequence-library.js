@@ -64,9 +64,25 @@ function createSequenceId() {
   return `seq-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
+function normalizeLoopCountOption(value, fallback = '1') {
+  const text = String(value ?? '').trim().toLowerCase();
+  if (!text) {
+    return fallback;
+  }
+
+  if (text === 'inf' || text === 'infinite') {
+    return 'inf';
+  }
+
+  const numericValue = Number(text);
+  return Number.isInteger(numericValue) && numericValue > 0
+    ? String(numericValue)
+    : fallback;
+}
+
 function readSequenceOptionsFromUi() {
   return {
-    loopCount: $('seq-loop-count')?.value || '1',
+    loopCount: normalizeLoopCountOption($('seq-loop-count')?.value, '1'),
     autoAbort: $('seq-auto-abort')?.value || 'ALARM',
     flashBeforeRun: $('seq-flash-before-run')?.value === 'SELECTED_FIRMWARE'
   };
@@ -74,7 +90,7 @@ function readSequenceOptionsFromUi() {
 
 function applySequenceOptionsToUi(options = {}) {
   if ($('seq-loop-count')) {
-    $('seq-loop-count').value = String(options.loopCount || 1);
+    $('seq-loop-count').value = normalizeLoopCountOption(options.loopCount, '1');
   }
 
   if ($('seq-auto-abort')) {
@@ -123,7 +139,7 @@ function normalizeSavedSequences(value) {
         name: sequence.name.trim(),
         timeline: normalizeSequenceTimeline(sequence.timeline, fallbackRamp),
         options: {
-          loopCount: String(sequence.options?.loopCount || '1'),
+          loopCount: normalizeLoopCountOption(sequence.options?.loopCount, '1'),
           autoAbort: sequence.options?.autoAbort === 'NEVER' ? 'NEVER' : 'ALARM',
           flashBeforeRun: Boolean(sequence.options?.flashBeforeRun)
         },
@@ -153,7 +169,7 @@ function normalizeSequenceDraft(value) {
     name: typeof value.name === 'string' ? value.name : '',
     timeline: normalizedTimeline,
     options: {
-      loopCount: String(value.options?.loopCount || '1'),
+      loopCount: normalizeLoopCountOption(value.options?.loopCount, '1'),
       autoAbort: value.options?.autoAbort === 'NEVER' ? 'NEVER' : 'ALARM',
       flashBeforeRun: Boolean(value.options?.flashBeforeRun)
     },
@@ -647,7 +663,7 @@ function bindEditorDirtyState() {
     const element = $(id);
     if (!element) return;
 
-    const eventName = id === 'seq-name' ? 'input' : 'change';
+    const eventName = ['seq-name', 'seq-loop-count'].includes(id) ? 'input' : 'change';
     element.addEventListener(eventName, markEditorDirty);
   });
 

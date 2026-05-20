@@ -19,7 +19,8 @@ A robust Electron-based desktop application for industrial control of **Branson 
 epiezo-dcx-control/
 ├── main.js             # Electron main process (IPC handlers, window management)
 ├── preload.js          # Secure IPC bridge
-├── renderer.js         # Bundled React renderer output
+├── dist/renderer/      # Bundled React renderer output
+├── renderer.css        # Bundled renderer styles
 ├── index.html          # Electron HTML shell
 ├── src/
 │   ├── main.jsx        # React entry point
@@ -43,6 +44,13 @@ epiezo-dcx-control/
    ```bash
    npm start
    ```
+
+3. **Build Windows Executables:**
+   ```bash
+   npm run dist
+   ```
+
+   The generated installer and portable `.exe` files are written to `release/`.
 
 ## Usage
 

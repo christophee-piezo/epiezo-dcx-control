@@ -15,6 +15,13 @@ const {
 
 const DCX_MIN_AMPLITUDE = 0;
 const DCX_MAX_AMPLITUDE = 100;
+const DEFAULT_FREQUENCY_FAMILY_HZ = 40000;
+const FREQUENCY_FAMILY_HZ = [20000, 30000, 40000];
+const FREQUENCY_FAMILY_LIMITS_HZ = {
+  20000: { minimum: 19450, maximum: 20450 },
+  30000: { minimum: 29250, maximum: 30750 },
+  40000: { minimum: 38900, maximum: 40900 }
+};
 const INVALID_SERIAL_PORT_VALUES = new Set([
   'detecting...',
   'detection...',
@@ -151,6 +158,41 @@ function averageFiniteValues(values = []) {
   return finiteValues.reduce((sum, value) => sum + value, 0) / finiteValues.length;
 }
 
+function parseFrequencyValueHz(value) {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value;
+  }
+
+  const text = String(value || '').trim();
+  if (!text) {
+    return null;
+  }
+
+  const numericMatch = text.match(/-?\d+(?:\.\d+)?/);
+  if (!numericMatch) {
+    return null;
+  }
+
+  const numericValue = Number(numericMatch[0]);
+  if (!Number.isFinite(numericValue)) {
+    return null;
+  }
+
+  return /khz/i.test(text) ? numericValue * 1000 : numericValue;
+}
+
+function resolveFrequencyFamilyHz(referenceFrequencyHz = DEFAULT_FREQUENCY_FAMILY_HZ) {
+  return FREQUENCY_FAMILY_HZ.reduce((closest, candidate) => (
+    Math.abs(candidate - referenceFrequencyHz) < Math.abs(closest - referenceFrequencyHz)
+      ? candidate
+      : closest
+  ), DEFAULT_FREQUENCY_FAMILY_HZ);
+}
+
+function getFrequencyFamilyLimitsHz(frequencyFamilyHz = DEFAULT_FREQUENCY_FAMILY_HZ) {
+  return FREQUENCY_FAMILY_LIMITS_HZ[frequencyFamilyHz] || FREQUENCY_FAMILY_LIMITS_HZ[DEFAULT_FREQUENCY_FAMILY_HZ];
+}
+
 function buildSimulatedHornScanMetadata(samples = []) {
   const frequencies = samples
     .map((sample) => Number(sample?.frequency))
@@ -240,6 +282,7 @@ class DcxService extends EventEmitter {
     this.setupMetadata = {};
     this.serialTelemetryEnabled = false;
     this.serialTelemetryForced = false;
+    this.serialFrequencyFamilyHz = null;
 
     this.telemetry = {
       deviceStatus: 'Disconnected',
@@ -332,6 +375,10 @@ class DcxService extends EventEmitter {
       STATUS_SIGNAL_FIELDS.forEach((field) => {
         delete sanitizedTelemetry[field];
       });
+
+      // Cycles should come from the Teensy telemetry path so the displayed count
+      // matches the same measured frequency the fixture used to integrate it.
+      delete sanitizedTelemetry.cycles;
     }
 
     const nextTelemetry = {
@@ -340,10 +387,9 @@ class DcxService extends EventEmitter {
     };
     const resolvedTelemetry = this.getResolvedTelemetrySnapshot(nextTelemetry);
 
-    // Live frequency/cycle readback is only meaningful during sonics or seek/scan.
+    // Live frequency readback is only meaningful during sonics or seek/scan.
     if (this.status === 'online' && !resolvedTelemetry.active && !resolvedTelemetry.seek) {
       delete sanitizedTelemetry.frequency;
-      delete sanitizedTelemetry.cycles;
     }
 
     this.telemetry = {
@@ -400,7 +446,60 @@ class DcxService extends EventEmitter {
       ...this.systemInfo
     });
 
+    this.syncSerialFrequencyFamily();
+
     return this.getSystemInfoSnapshot();
+  }
+
+  getOperatingFrequencyFamilyHz() {
+    const referenceCandidates = [
+      this.systemInfo?.frequency,
+      this.settings?.digitaltune,
+      this.telemetry?.frequency
+    ]
+      .map((value) => parseFrequencyValueHz(value))
+      .filter((value) => Number.isFinite(value));
+
+    return resolveFrequencyFamilyHz(referenceCandidates[0] ?? DEFAULT_FREQUENCY_FAMILY_HZ);
+  }
+
+  getNominalFrequencyHz() {
+    const frequencyFamilyHz = this.getOperatingFrequencyFamilyHz();
+    const limits = getFrequencyFamilyLimitsHz(frequencyFamilyHz);
+    const exactCandidates = [
+      this.settings?.digitaltune,
+      this.telemetry?.frequency,
+      this.systemInfo?.frequency
+    ]
+      .map((value) => parseFrequencyValueHz(value))
+      .filter((value) => Number.isFinite(value));
+    const exactMatch = exactCandidates.find((value) => value >= limits.minimum && value <= limits.maximum);
+
+    return exactMatch ?? frequencyFamilyHz;
+  }
+
+  getFrequencyRangeLimitsHz() {
+    return getFrequencyFamilyLimitsHz(this.getOperatingFrequencyFamilyHz());
+  }
+
+  syncSerialFrequencyFamily({ force = false } = {}) {
+    if (this.simulation || !this.serialService.isConnected()) {
+      return null;
+    }
+
+    const nextFamilyHz = this.getOperatingFrequencyFamilyHz();
+    if (!force && this.serialFrequencyFamilyHz === nextFamilyHz) {
+      return nextFamilyHz;
+    }
+
+    try {
+      this.serialService.sendCommand(`SET_FREQ_FAMILY ${nextFamilyHz}`);
+      this.serialFrequencyFamilyHz = nextFamilyHz;
+      return nextFamilyHz;
+    } catch (error) {
+      console.error('[SERIAL FREQ FAMILY SYNC ERROR]', error.message);
+      return null;
+    }
   }
 
   setConnectionState({
@@ -623,6 +722,8 @@ class DcxService extends EventEmitter {
     const amplitude = Number(this.telemetry.amplitude) || Number(this.settings.weldAmp) || 0;
     const isActive = Boolean(this.telemetry.active);
     const isSeek = Boolean(this.telemetry.seek);
+    const nominalFrequencyHz = this.getNominalFrequencyHz();
+    const frequencyLimits = this.getFrequencyRangeLimitsHz();
 
     let frequency = 0;
     let power = 0;
@@ -630,16 +731,22 @@ class DcxService extends EventEmitter {
     let deviceStatus = 'Simulator Ready';
 
     if (isActive) {
-      frequency = 39950 + Math.round(Math.sin(phase) * 35);
+      frequency = Math.round(Math.min(
+        frequencyLimits.maximum,
+        Math.max(frequencyLimits.minimum, nominalFrequencyHz + (Math.sin(phase) * 35))
+      ));
       power = Math.max(5, Math.round(amplitude * 0.8));
       cycleIncrement = Math.max(1, Math.round(amplitude / 4));
       deviceStatus = 'Simulating Weld Cycle';
     } else if (isSeek) {
-      frequency = 39880 + Math.round(Math.sin(phase * 1.4) * 90);
+      frequency = Math.round(Math.min(
+        frequencyLimits.maximum,
+        Math.max(frequencyLimits.minimum, nominalFrequencyHz + (Math.sin(phase * 1.4) * 90))
+      ));
       power = 8;
       deviceStatus = 'Simulating Seek';
     } else {
-      frequency = 40000;
+      frequency = Math.round(nominalFrequencyHz);
       deviceStatus = 'Simulator Ready';
     }
 
@@ -757,7 +864,7 @@ class DcxService extends EventEmitter {
         seek: 0,
         alarm: 0,
         power: 0,
-        frequency: 40000
+        frequency: Math.round(this.getNominalFrequencyHz())
       });
       this.startSimulationLoop();
 
@@ -836,6 +943,8 @@ class DcxService extends EventEmitter {
       systemInfo = await this.getSystemInfo({ status });
     }
 
+    this.syncSerialFrequencyFamily({ force: true });
+
     return {
       success: true,
       status: 'online',
@@ -863,6 +972,7 @@ class DcxService extends EventEmitter {
     this.serialService.disconnect();
     this.ethernetService.disconnect();
     this.syncTransportState();
+    this.serialFrequencyFamilyHz = null;
 
     this.stopSimulationLoop();
     this.clearSystemInfo();
@@ -1081,6 +1191,10 @@ class DcxService extends EventEmitter {
     return weldAmp;
   }
 
+  isExternalAmplitudeEnabled() {
+    return String(this.settings.externalamplitude ?? '').trim() === '1';
+  }
+
   resolveControlTransport(action, options = {}) {
     const preferredTransport = String(options?.transport || '').trim().toLowerCase();
 
@@ -1088,11 +1202,27 @@ class DcxService extends EventEmitter {
       return 'serial';
     }
 
+    if (action === 'resetCycles') {
+      return 'serial';
+    }
+
     if (action === 'resetOverload') {
       return 'ethernet';
     }
 
-    if (['seek', 'reset', 'setAmp'].includes(action)) {
+    if (action === 'setAmp') {
+      if (['serial', 'teensy'].includes(preferredTransport)) {
+        return 'serial';
+      }
+
+      if (['ethernet', 'http'].includes(preferredTransport)) {
+        return 'ethernet';
+      }
+
+      return this.isExternalAmplitudeEnabled() ? 'serial' : 'ethernet';
+    }
+
+    if (['seek', 'reset'].includes(action)) {
       if (['serial', 'teensy'].includes(preferredTransport)) {
         return 'serial';
       }
@@ -1129,7 +1259,7 @@ class DcxService extends EventEmitter {
             active: 0,
             seek: 0
           } : {}),
-          frequency: this.simulation ? 40000 : this.telemetry.frequency,
+          frequency: this.simulation ? Math.round(this.getNominalFrequencyHz()) : this.telemetry.frequency,
           power: 0,
           deviceStatus: this.simulation ? 'Simulator Ready' : this.telemetry.deviceStatus
         });
@@ -1154,8 +1284,14 @@ class DcxService extends EventEmitter {
             active: 0,
             ready: 1
           } : {}),
-          frequency: this.simulation ? 40000 : this.telemetry.frequency,
+          frequency: this.simulation ? Math.round(this.getNominalFrequencyHz()) : this.telemetry.frequency,
           power: 0,
+          deviceStatus: this.simulation ? 'Simulator Ready' : this.telemetry.deviceStatus
+        });
+        break;
+      case 'resetCycles':
+        this.updateTelemetry({
+          cycles: 0,
           deviceStatus: this.simulation ? 'Simulator Ready' : this.telemetry.deviceStatus
         });
         break;
@@ -1270,6 +1406,9 @@ class DcxService extends EventEmitter {
               ? this.runSerialCommand('RESET')
               : await this._post(4, 1);
             break;
+          case 'resetCycles':
+            result = this.runSerialCommand('MEMORY_CLEAR');
+            break;
           case 'resetOverload':
             result = await this._post(16, 0);
             break;
@@ -1326,6 +1465,8 @@ class DcxService extends EventEmitter {
     if (this.simulation) {
       this.settings = nextState;
 
+      this.syncSerialFrequencyFamily();
+
       if (this.settings.weldAmp != null) {
         this.updateTelemetry({ amplitude: Number(this.settings.weldAmp) || 0 });
       }
@@ -1354,6 +1495,7 @@ class DcxService extends EventEmitter {
     }
 
     this.settings = nextState;
+    this.syncSerialFrequencyFamily();
 
     if (this.settings.weldAmp != null) {
       this.updateTelemetry({ amplitude: Number(this.settings.weldAmp) || 0 });

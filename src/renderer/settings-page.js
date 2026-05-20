@@ -12,11 +12,10 @@ const ALARM_HISTORY_STORE_KEY = 'alarm-history';
 const MAX_ALARM_HISTORY_ENTRIES = 200;
 const MAX_SIGNATURE_SAMPLES = 240;
 const WELD_DATA_CAPTURE_MS = 5000;
-const IO_POLL_INTERVAL_MS = 10;
+const IO_POLL_INTERVAL_MS = 500;
 const DEFAULT_SIGNATURE_DRAW_FROM = 0;
 const DEFAULT_SIGNATURE_DRAW_TO = WELD_DATA_CAPTURE_MS;
-const DEFAULT_HORN_SCAN_DRAW_FROM = 38900;
-const DEFAULT_HORN_SCAN_DRAW_TO = 40900;
+const DEFAULT_FREQUENCY_FAMILY_HZ = 40000;
 const ROUTING_FIELD_IDS = ['route-amplitude', 'route-seek', 'route-reset'];
 const ANALOG_OUTPUT_ASSIGNMENT_SELECT_IDS = ['settings-io-config-analog-output-24-select', 'settings-io-config-analog-output-25-select'];
 const IO_CONFIGURATION_FIELDS = {
@@ -383,6 +382,23 @@ function normalizeSetupMetadata(metadata = {}) {
     : {};
 }
 
+function getSetupMetadataWithFrequencyRanges(metadata = {}, telemetry = runtimeState.lastTelemetry || {}) {
+  const nextMetadata = normalizeSetupMetadata(metadata);
+  const limits = getFrequencyRangeLimitsHz(telemetry);
+  if (!limits) {
+    return nextMetadata;
+  }
+
+  return {
+    ...nextMetadata,
+    digitaltune: {
+      ...(nextMetadata.digitaltune || {}),
+      min: String(limits.minimum),
+      max: String(limits.maximum)
+    }
+  };
+}
+
 function setToggleChecked(id, checked) {
   const element = $(id);
   if (element) {
@@ -396,7 +412,7 @@ function isSetupEnabledValue(value) {
 
 function applySetupConfiguration(settings = {}, metadata = {}, { persist = true } = {}) {
   const nextSettings = normalizeSetupState(settings);
-  const nextMetadata = normalizeSetupMetadata(metadata);
+  const nextMetadata = getSetupMetadataWithFrequencyRanges(metadata);
 
   if (persist) {
     runtimeState.setupConfig = nextSettings;
@@ -429,6 +445,13 @@ function applySetupConfiguration(settings = {}, metadata = {}, { persist = true 
       setToggleChecked(radioId, true);
     }
   }
+
+  document.dispatchEvent(new CustomEvent('app:setup-config-updated', {
+    detail: {
+      settings: activeSettings,
+      metadata: activeMetadata
+    }
+  }));
 }
 
 function canLoadSetupConfiguration() {
@@ -979,12 +1002,17 @@ function getOperatingFrequencyFamilyHz(telemetry = runtimeState.lastTelemetry ||
     telemetry.frequency
   ].map((value) => parseFrequencyValueHz(value)).filter((value) => Number.isFinite(value));
 
-  const referenceFrequency = candidates[0] ?? 40000;
+  const referenceFrequency = candidates[0] ?? DEFAULT_FREQUENCY_FAMILY_HZ;
   return [20000, 30000, 40000].reduce((closest, candidate) => (
     Math.abs(candidate - referenceFrequency) < Math.abs(closest - referenceFrequency)
       ? candidate
       : closest
-  ), 40000);
+  ), DEFAULT_FREQUENCY_FAMILY_HZ);
+}
+
+function getFrequencyRangeLimitsHz(telemetry = runtimeState.lastTelemetry || {}) {
+  const operatingFrequencyHz = getOperatingFrequencyFamilyHz(telemetry);
+  return FREQUENCY_OUTPUT_LIMITS_HZ[operatingFrequencyHz] || FREQUENCY_OUTPUT_LIMITS_HZ[DEFAULT_FREQUENCY_FAMILY_HZ];
 }
 
 function scaleFrequencyToVoltage(value, telemetry = runtimeState.lastTelemetry || {}) {
@@ -993,8 +1021,7 @@ function scaleFrequencyToVoltage(value, telemetry = runtimeState.lastTelemetry |
     return null;
   }
 
-  const operatingFrequencyHz = getOperatingFrequencyFamilyHz(telemetry);
-  const limits = FREQUENCY_OUTPUT_LIMITS_HZ[operatingFrequencyHz] || FREQUENCY_OUTPUT_LIMITS_HZ[40000];
+  const limits = getFrequencyRangeLimitsHz(telemetry);
   const clampedValue = Math.max(limits.minimum, Math.min(limits.maximum, numericValue));
 
   return ((clampedValue - limits.minimum) / (limits.maximum - limits.minimum)) * 10;
@@ -1642,9 +1669,10 @@ function getDefaultHornScanRange() {
     };
   }
 
+  const limits = getFrequencyRangeLimitsHz();
   return {
-    from: DEFAULT_HORN_SCAN_DRAW_FROM,
-    to: DEFAULT_HORN_SCAN_DRAW_TO
+    from: limits.minimum,
+    to: limits.maximum
   };
 }
 
@@ -2910,6 +2938,7 @@ export function initializeSettingsPage() {
 
   document.addEventListener('app:system-info-updated', (event) => {
     renderSystemInfo(event.detail || runtimeState.systemInfo || {});
+    applySetupConfiguration(runtimeState.setupConfig || {}, runtimeState.setupMetadata || {});
     refreshIoSummary();
   });
 

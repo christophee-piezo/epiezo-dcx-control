@@ -1,12 +1,15 @@
 {
   "name": "epiezo-dcx-control",
+  "description": "ePiezo DCX Control Application",
+  "author": "Christophe",
   "version": "1.0.0",
   "main": "main.js",
   "scripts": {
     "build:styles": "npx @tailwindcss/cli -i ./src/styles.css -o ./renderer.css",
     "build:renderer": "node ./scripts/build-renderer.mjs",
     "build": "npm run build:styles && npm run build:renderer",
-    "start": "npm run build && electron ."
+    "start": "npm run build && electron .",
+    "dist": "npm run build && electron-builder --win"
   },
   "dependencies": {
     "@serialport/parser-readline": "^13.0.0",
@@ -25,8 +28,33 @@
     "@tailwindcss/cli": "^4.2.2",
     "autoprefixer": "^10.5.0",
     "electron": "^41.2.1",
+    "electron-builder": "^26.0.12",
     "esbuild": "^0.28.0",
     "postcss": "^8.5.10",
     "tailwindcss": "^4.2.2"
+  },
+  "build": {
+    "appId": "com.epiezo.dcxcontrol",
+    "productName": "ePiezo DCX Control",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "index.html",
+      "renderer.css",
+      "dist/renderer/**/*",
+      "services/**/*",
+      "adapters/**/*",
+      "firmware/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        "nsis",
+        "portable"
+      ]
+    }
   }
 }

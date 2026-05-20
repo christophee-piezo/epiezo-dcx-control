@@ -1,7 +1,7 @@
 import { Pause, Play, Trash2 } from 'lucide-react';
 
 import { Button } from '../../ui/button.jsx';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../../ui/card.jsx';
+import { Card, CardContent, CardHeader, CardTitle } from '../../ui/card.jsx';
 import { CheckboxSelect } from '../../ui/checkbox-select.jsx';
 import { Input } from '../../ui/input.jsx';
 import { FormField } from '../form-field.jsx';
@@ -31,7 +31,6 @@ export function DashboardView() {
           <Card className="flex min-h-0 flex-col">
             <CardHeader>
               <CardTitle data-i18n="dashboard.realtime.title">Real-Time Data</CardTitle>
-              <CardDescription data-i18n="dashboard.realtime.description">Current live readings from the DCX stack.</CardDescription>
             </CardHeader>
             <CardContent className="space-y-1">
               <TelemetryRow label="Frequency" labelKey="dashboard.labels.frequency" unit="Hz" valueId="freq-val" />
@@ -52,7 +51,6 @@ export function DashboardView() {
           <Card className="flex min-h-0 flex-col">
             <CardHeader>
               <CardTitle data-i18n="dashboard.manual.title">Manual Control</CardTitle>
-              <CardDescription data-i18n="dashboard.manual.description">Direct operator commands for start, stop, tune, and reset.</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
               <FormField label="Amplitude Target (%)" labelKey="dashboard.manual.amplitudeTarget">
@@ -79,6 +77,10 @@ export function DashboardView() {
                   Reset
                 </Button>
               </div>
+
+              <Button className="w-full" data-i18n="dashboard.manual.resetCycles" id="reset-cycles-btn" variant="outline">
+                Reset Cycles
+              </Button>
             </CardContent>
           </Card>
         </div>
